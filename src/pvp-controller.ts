@@ -193,7 +193,7 @@ export class PvpController {
 
       if (this.mode === "one") {
         this.disable(ui);
-        ui.notify("PVP 一次性模式：模型请求成功，已自动关闭", "info");
+        ui.notify("PVP OFF", "info");
       } else {
         this.updateUi(ui);
       }
@@ -264,19 +264,19 @@ export class PvpController {
 
     if (command === "" || command === "on") {
       this.enable("persistent", ctx.ui);
-      ctx.ui.notify("PVP 常驻模式已开启", "info");
+      ctx.ui.notify("PVP ON", "info");
       return;
     }
 
     if (command === "one") {
       this.enable("one", ctx.ui);
-      ctx.ui.notify("PVP 一次性模式已开启：成功后自动关闭", "info");
+      ctx.ui.notify("PVP ONE", "info");
       return;
     }
 
     if (command === "off") {
       this.disable(ctx.ui);
-      ctx.ui.notify("PVP 已关闭", "info");
+      ctx.ui.notify("PVP OFF", "info");
       return;
     }
 
