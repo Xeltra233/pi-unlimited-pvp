@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import pvpExtension, { PVP_STATUS_KEY } from "../src/index.js";
+import pvpExtension, { PVP_STATUS_KEY, PVP_WIDGET_KEY } from "../src/index.js";
 
 type EventHandler = (event: any, ctx: ExtensionContext) => any;
 
@@ -36,14 +36,22 @@ function createMockExtensionApi(): {
   };
 }
 
-function createMockContext(): ExtensionCommandContext & { statuses: Record<string, string | undefined>; notifications: Array<{ msg: string; type?: string }> } {
+function createMockContext(): ExtensionCommandContext & {
+  statuses: Record<string, string | undefined>;
+  widgets: Record<string, { content: string[] | undefined; options?: any }>;
+  notifications: Array<{ msg: string; type?: string }>;
+} {
   const statuses: Record<string, string | undefined> = {};
+  const widgets: Record<string, { content: string[] | undefined; options?: any }> = {};
   const notifications: Array<{ msg: string; type?: string }> = [];
 
   return {
     ui: {
       setStatus: vi.fn((key: string, value: string | undefined) => {
         statuses[key] = value;
+      }),
+      setWidget: vi.fn((key: string, content: any, options?: any) => {
+        widgets[key] = { content, options };
       }),
       notify: vi.fn((msg: string, type?: string) => {
         notifications.push({ msg, type });
@@ -53,6 +61,7 @@ function createMockContext(): ExtensionCommandContext & { statuses: Record<strin
       input: vi.fn(),
     } as any,
     statuses,
+    widgets,
     notifications,
     mode: "tui",
     hasUI: true,
@@ -97,7 +106,10 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     // 1. User enters /pvp
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP");
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
+    expect(ctx.notifications[0]?.msg).toBe("PVP ON");
 
     // 2. User submits prompt
     const beforeAgentStart = handlers.get("before_agent_start")![0];
@@ -136,7 +148,7 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     expect(sentMessages).toHaveLength(2);
     expect(sentMessages[1].content).toBe("Build a feature");
 
-    // 5. Turn 3 succeeds
+    // Turn 3 succeeds
     const successMsg = {
       role: "assistant",
       content: [{ type: "text", text: "Done!" }],
@@ -144,8 +156,9 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     };
     turnEnd({ type: "turn_end", turnIndex: 2, message: successMsg, toolResults: [] }, ctx);
 
-    // Persistent mode keeps status bar active
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP");
+    // Persistent mode keeps status bar and widget active
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
 
     vi.useRealTimers();
   });
@@ -159,7 +172,10 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     // 1. User enters /pvp one
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("one", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP");
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
+    expect(ctx.notifications[0]?.msg).toBe("PVP ONE");
 
     // 2. User submits prompt
     const beforeAgentStart = handlers.get("before_agent_start")![0];
@@ -181,7 +197,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     vi.runAllTimers();
 
     expect(sentMessages).toHaveLength(1);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP");
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ONE (第 1 次重试...)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE (第 1 次重试...)"]);
 
     // 4. Retry turn succeeds
     const successMsg = {
@@ -191,9 +208,10 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     };
     turnEnd({ type: "turn_end", turnIndex: 1, message: successMsg, toolResults: [] }, ctx);
 
-    // Status bar must be cleared automatically
+    // Status bar and widget must be cleared automatically
     expect(ctx.statuses[PVP_STATUS_KEY]).toBeUndefined();
-    expect(ctx.notifications.some((n) => n.msg.includes("已自动关闭"))).toBe(true);
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toBeUndefined();
+    expect(ctx.notifications.some((n) => n.msg === "PVP OFF")).toBe(true);
 
     vi.useRealTimers();
   });
@@ -205,11 +223,13 @@ describe("PVP Extension End-to-End Lifecycle", () => {
 
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP");
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
 
     const sessionShutdown = handlers.get("session_shutdown")![0];
     sessionShutdown({ type: "session_shutdown", reason: "quit" }, ctx);
 
     expect(ctx.statuses[PVP_STATUS_KEY]).toBeUndefined();
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toBeUndefined();
   });
 });
