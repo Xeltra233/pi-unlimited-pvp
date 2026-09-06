@@ -6,13 +6,15 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 export const PVP_STATUS_KEY = "pi-unlimited-pvp";
-
+export const PVP_WIDGET_KEY = "pi-unlimited-pvp";
 export type PvpMode = "off" | "persistent" | "one";
 
 export type PvpAgentMessage = TurnEndEvent["message"];
 export type PvpImageContent = NonNullable<BeforeAgentStartEvent["images"]>[number];
 
-export type PvpUi = Pick<ExtensionUIContext, "notify" | "setStatus">;
+export type PvpUi = Pick<ExtensionUIContext, "notify" | "setStatus"> & {
+  setWidget?: ExtensionUIContext["setWidget"];
+};
 export type PvpCommandContext = Pick<ExtensionCommandContext, "ui">;
 
 const COMMAND_MODES = ["on", "one", "off"] as const;
@@ -74,16 +76,39 @@ export class PvpController {
     return this.lastError;
   }
 
+  /** Update footer status and persistent widget docked below the editor. */
+  private updateUi(ui: PvpUi): void {
+    if (this.mode === "off") {
+      ui.setStatus(PVP_STATUS_KEY, undefined);
+      if (typeof ui.setWidget === "function") {
+        ui.setWidget(PVP_WIDGET_KEY, undefined);
+      }
+      return;
+    }
+
+    const modeLabel = this.mode === "one" ? "PVP ONE" : "PVP ON";
+    const statusText =
+      this.attemptCount > 0
+        ? `${modeLabel} (第 ${this.attemptCount} 次重试...)`
+        : modeLabel;
+    const widgetText = `⚔️ ${statusText}`;
+
+    ui.setStatus(PVP_STATUS_KEY, statusText);
+    if (typeof ui.setWidget === "function") {
+      ui.setWidget(PVP_WIDGET_KEY, [widgetText], { placement: "belowEditor" });
+    }
+  }
+
   /** Enable resident mode or one-success mode. */
   enable(mode: Exclude<PvpMode, "off">, ui: PvpUi): void {
     this.cancelRetry();
     this.mode = mode;
     this.attemptCount = 0;
     this.lastError = undefined;
-    ui.setStatus(PVP_STATUS_KEY, "PVP");
+    this.updateUi(ui);
   }
 
-  /** Disable PVP, cancel pending retries, and clear the footer status marker. */
+  /** Disable PVP, cancel pending retries, and clear the footer status marker and widget. */
   disable(ui: PvpUi): void {
     this.cancelRetry();
     this.mode = "off";
@@ -91,7 +116,7 @@ export class PvpController {
     this.lastImages = undefined;
     this.attemptCount = 0;
     this.lastError = undefined;
-    ui.setStatus(PVP_STATUS_KEY, undefined);
+    this.updateUi(ui);
   }
 
   /** Record prompt and images submitted by the user or agent run. */
@@ -169,6 +194,8 @@ export class PvpController {
       if (this.mode === "one") {
         this.disable(ui);
         ui.notify("PVP 一次性模式：模型请求成功，已自动关闭", "info");
+      } else {
+        this.updateUi(ui);
       }
       return { shouldRetry: false, success: true };
     }
@@ -202,6 +229,7 @@ export class PvpController {
     const promptToRetry = this.lastPrompt;
     const imagesToRetry = this.lastImages ? [...this.lastImages] : undefined;
 
+    this.updateUi(ui);
     ui.notify(`PVP: 请求失败，正在无延迟重试 (第 ${currentAttempt} 次)...`, "info");
 
     this.retryTimer = setTimeout(() => {

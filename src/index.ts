@@ -3,6 +3,7 @@ import {
   getPvpArgumentCompletions,
   PvpController,
   PVP_STATUS_KEY,
+  PVP_WIDGET_KEY,
 } from "./pvp-controller.js";
 
 /**
@@ -71,6 +72,7 @@ export {
   getPvpArgumentCompletions,
   PvpController,
   PVP_STATUS_KEY,
+  PVP_WIDGET_KEY,
 } from "./pvp-controller.js";
 export type {
   PvpAgentMessage,
