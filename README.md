@@ -24,33 +24,41 @@ Pi 编码智能体（Pi Coding Agent）的无限自动重试插件。
 
 ## 📦 安装方法
 
-### 方式 1：通过 Git 安装（推荐）
+### 方式 1：通过 Git 远程一键安装（推荐）
 
-在 Pi 中直接运行安装命令：
+在终端中运行以下命令，Pi 会自动克隆并添加到全局配置中（`~/.pi/agent/settings.json`）：
 
 ```bash
-pi install github:Xeltra233/pi-unlimited-pvp
+pi install https://github.com/Xeltra233/pi-unlimited-pvp
+# 或使用 git 协议简写
+pi install git:github.com/Xeltra233/pi-unlimited-pvp
 ```
 
-### 方式 2：本地加载
+如果只想在当前项目生效，可加上 `-l` 参数：
 
-克隆本项目到本地后，可通过以下方式之一加载：
+```bash
+pi install -l https://github.com/Xeltra233/pi-unlimited-pvp
+```
 
-1. **命令行单次启动加载**：
-   ```bash
-   pi -e /path/to/pi-unlimited-pvp/src/index.ts
-   ```
+### 方式 2：本地目录指令安装
 
-2. **全局配置常驻加载**：
-   在 Pi 全局配置文件（`~/.pi/agent/settings.json`）的 `extensions` 列表中添加路径：
-   ```json
-   {
-     "extensions": [
-       "/path/to/pi-unlimited-pvp"
-     ]
-   }
-   ```
+如果已经将代码克隆到本地，也可以直接使用 `pi install` 指定本地路径安装：
 
+```bash
+pi install /path/to/pi-unlimited-pvp
+# 或在项目根目录下直接运行
+pi install .
+```
+
+### 方式 3：单次免安装试用
+
+无需安装到配置，仅在本次会话中加载：
+
+```bash
+pi -e git:github.com/Xeltra233/pi-unlimited-pvp
+# 或指定本地路径
+pi -e /path/to/pi-unlimited-pvp
+```
 ---
 
 ## 🚀 使用指南
