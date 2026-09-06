@@ -69,6 +69,7 @@ export default function pvpExtension(pi: ExtensionAPI): void {
 }
 
 export {
+  formatPvpStatus,
   getPvpArgumentCompletions,
   PvpController,
   PVP_STATUS_KEY,

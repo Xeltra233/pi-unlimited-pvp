@@ -14,6 +14,7 @@ export type PvpImageContent = NonNullable<BeforeAgentStartEvent["images"]>[numbe
 
 export type PvpUi = Pick<ExtensionUIContext, "notify" | "setStatus"> & {
   setWidget?: ExtensionUIContext["setWidget"];
+  theme?: ExtensionUIContext["theme"];
 };
 export type PvpCommandContext = Pick<ExtensionCommandContext, "ui">;
 
@@ -22,6 +23,37 @@ const COMMAND_MODES = ["on", "one", "off"] as const;
 export interface TurnEndResult {
   shouldRetry: boolean;
   success: boolean;
+}
+
+/**
+ * Format status indicator text conforming to Pi native TUI styling.
+ * Uses native theme colors (accent / warning / dim), standard dot indicator (●),
+ * and avoids oversized emojis or harsh square brackets.
+ */
+export function formatPvpStatus(
+  mode: Exclude<PvpMode, "off">,
+  attemptCount: number = 0,
+  theme?: ExtensionUIContext["theme"]
+): string {
+  const isOne = mode === "one";
+  const colorRole = isOne ? "warning" : "accent";
+
+  const fg = (color: "accent" | "warning" | "muted" | "dim", text: string): string => {
+    return theme ? theme.fg(color, text) : text;
+  };
+  const bold = (text: string): string => {
+    return theme ? theme.bold(text) : text;
+  };
+
+  const dot = fg(colorRole, "●");
+  const badge = bold(fg(colorRole, "PVP"));
+  const label = fg(colorRole, isOne ? "ONE" : "ON");
+
+  let status = `${dot} ${badge} ${label}`;
+  if (attemptCount > 0) {
+    status += ` ${fg("dim", `(第 ${attemptCount} 次重试)`)}`;
+  }
+  return status;
 }
 
 /**
@@ -76,7 +108,7 @@ export class PvpController {
     return this.lastError;
   }
 
-  /** Update footer status and persistent widget docked below the editor. */
+  /** Update footer status and persistent widget docked below the editor with native styling. */
   private updateUi(ui: PvpUi): void {
     if (this.mode === "off") {
       ui.setStatus(PVP_STATUS_KEY, undefined);
@@ -86,16 +118,11 @@ export class PvpController {
       return;
     }
 
-    const modeLabel = this.mode === "one" ? "PVP ONE" : "PVP ON";
-    const statusText =
-      this.attemptCount > 0
-        ? `${modeLabel} (第 ${this.attemptCount} 次重试...)`
-        : modeLabel;
-    const widgetText = `⚔️ ${statusText}`;
+    const styledText = formatPvpStatus(this.mode, this.attemptCount, ui.theme);
 
-    ui.setStatus(PVP_STATUS_KEY, statusText);
+    ui.setStatus(PVP_STATUS_KEY, styledText);
     if (typeof ui.setWidget === "function") {
-      ui.setWidget(PVP_WIDGET_KEY, [widgetText], { placement: "belowEditor" });
+      ui.setWidget(PVP_WIDGET_KEY, [styledText], { placement: "belowEditor" });
     }
   }
 

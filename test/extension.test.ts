@@ -106,8 +106,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     // 1. User enters /pvp
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
     expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ctx.notifications[0]?.msg).toBe("PVP ON");
 
@@ -157,8 +157,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     turnEnd({ type: "turn_end", turnIndex: 2, message: successMsg, toolResults: [] }, ctx);
 
     // Persistent mode keeps status bar and widget active
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
 
     vi.useRealTimers();
   });
@@ -172,8 +172,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     // 1. User enters /pvp one
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("one", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
     expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ctx.notifications[0]?.msg).toBe("PVP ONE");
 
@@ -197,8 +197,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     vi.runAllTimers();
 
     expect(sentMessages).toHaveLength(1);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ONE (第 1 次重试...)");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE (第 1 次重试...)"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE (第 1 次重试)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE (第 1 次重试)"]);
 
     // 4. Retry turn succeeds
     const successMsg = {
@@ -223,8 +223,8 @@ describe("PVP Extension End-to-End Lifecycle", () => {
 
     const pvpCmd = commands.get("pvp");
     await pvpCmd.handler("", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
 
     const sessionShutdown = handlers.get("session_shutdown")![0];
     sessionShutdown({ type: "session_shutdown", reason: "quit" }, ctx);

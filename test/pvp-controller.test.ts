@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  formatPvpStatus,
   getPvpArgumentCompletions,
   PvpController,
   PVP_STATUS_KEY,
@@ -50,15 +51,15 @@ describe("PvpController State & Commands", () => {
     controller.handleCommand("", { ui });
     expect(controller.currentMode).toBe("persistent");
     expect(controller.enabled).toBe(true);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ui.notifications[0]?.msg).toBe("PVP ON");
 
     controller.handleCommand("on", { ui });
     expect(controller.currentMode).toBe("persistent");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
     expect(ui.notifications[1]?.msg).toBe("PVP ON");
   });
 
@@ -69,8 +70,8 @@ describe("PvpController State & Commands", () => {
     controller.handleCommand("one", { ui });
     expect(controller.currentMode).toBe("one");
     expect(controller.enabled).toBe(true);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ui.notifications[0]?.msg).toBe("PVP ONE");
   });
@@ -80,8 +81,8 @@ describe("PvpController State & Commands", () => {
     const ui = createMockUi();
 
     controller.enable("persistent", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
 
     controller.handleCommand("off", { ui });
     expect(controller.currentMode).toBe("off");
@@ -306,16 +307,16 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(result.shouldRetry).toBe(false);
     expect(controller.enabled).toBe(true);
     expect(controller.currentMode).toBe("persistent");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
   });
 
   it("one mode automatically closes upon success and removes status and widget", () => {
     const controller = new PvpController();
     const ui = createMockUi();
     controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
 
     const successMessage: PvpAgentMessage = {
       role: "assistant",
@@ -342,8 +343,8 @@ describe("PvpController Turn Outcomes & Retries", () => {
     const controller = new PvpController();
     const ui = createMockUi();
     controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
 
     const toolUseMessage: PvpAgentMessage = {
       role: "assistant",
@@ -361,8 +362,8 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(result.shouldRetry).toBe(false);
     expect(controller.enabled).toBe(true);
     expect(controller.currentMode).toBe("one");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
   });
 });
 
@@ -455,9 +456,25 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
     const sendFn = vi.fn();
     controller.scheduleRetry(sendFn, ui);
 
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("PVP ON (第 1 次重试...)");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["⚔️ PVP ON (第 1 次重试...)"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON (第 1 次重试)");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON (第 1 次重试)"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
+  });
+
+  it("formats status with native theme colors and styling", () => {
+    const mockTheme = {
+      fg: vi.fn((color: string, text: string) => `[fg:${color}]${text}[/fg]`),
+      bold: vi.fn((text: string) => `[b]${text}[/b]`),
+      dim: vi.fn((text: string) => `[dim]${text}[/dim]`),
+    } as any;
+
+    const persistentStatus = formatPvpStatus("persistent", 0, mockTheme);
+    expect(persistentStatus).toBe("[fg:accent]●[/fg] [b][fg:accent]PVP[/fg][/b] [fg:accent]ON[/fg]");
+
+    const oneStatus = formatPvpStatus("one", 2, mockTheme);
+    expect(oneStatus).toBe(
+      "[fg:warning]●[/fg] [b][fg:warning]PVP[/fg][/b] [fg:warning]ONE[/fg] [fg:dim](第 2 次重试)[/fg]"
+    );
   });
 
   it("works gracefully when setWidget is undefined (headless / minimal UI context)", () => {
@@ -479,7 +496,8 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
       controller.disable(headlessUi);
     }).not.toThrow();
 
-    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "PVP ON");
+    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "● PVP ON");
+    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "● PVP ON (第 1 次重试)");
     expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, undefined);
   });
 });
