@@ -26,7 +26,14 @@ function createMockUi(): PvpUi & {
       statuses[key] = value;
     }),
     setWidget: vi.fn((key: string, content: any, options?: any) => {
-      widgets[key] = { content, options };
+      let resolvedContent: string[] | undefined;
+      if (typeof content === "function") {
+        const comp = content({}, undefined);
+        resolvedContent = comp?.render?.(80);
+      } else {
+        resolvedContent = content;
+      }
+      widgets[key] = { content: resolvedContent, options };
     }),
     notify: vi.fn((msg: string, type?: "info" | "warning" | "error") => {
       notifications.push({ msg, type });
@@ -51,15 +58,15 @@ describe("PvpController State & Commands", () => {
     controller.handleCommand("", { ui });
     expect(controller.currentMode).toBe("persistent");
     expect(controller.enabled).toBe(true);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp on");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ui.notifications[0]?.msg).toBe("PVP ON");
 
     controller.handleCommand("on", { ui });
     expect(controller.currentMode).toBe("persistent");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp on");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
     expect(ui.notifications[1]?.msg).toBe("PVP ON");
   });
 
@@ -70,8 +77,8 @@ describe("PvpController State & Commands", () => {
     controller.handleCommand("one", { ui });
     expect(controller.currentMode).toBe("one");
     expect(controller.enabled).toBe(true);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
     expect(ui.notifications[0]?.msg).toBe("PVP ONE");
   });
@@ -81,8 +88,8 @@ describe("PvpController State & Commands", () => {
     const ui = createMockUi();
 
     controller.enable("persistent", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp on");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
 
     controller.handleCommand("off", { ui });
     expect(controller.currentMode).toBe("off");
@@ -307,16 +314,16 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(result.shouldRetry).toBe(false);
     expect(controller.enabled).toBe(true);
     expect(controller.currentMode).toBe("persistent");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp on");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
   });
 
   it("one mode automatically closes upon success and removes status and widget", () => {
     const controller = new PvpController();
     const ui = createMockUi();
     controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
 
     const successMessage: PvpAgentMessage = {
       role: "assistant",
@@ -343,8 +350,8 @@ describe("PvpController Turn Outcomes & Retries", () => {
     const controller = new PvpController();
     const ui = createMockUi();
     controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
 
     const toolUseMessage: PvpAgentMessage = {
       role: "assistant",
@@ -362,8 +369,8 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(result.shouldRetry).toBe(false);
     expect(controller.enabled).toBe(true);
     expect(controller.currentMode).toBe("one");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ONE");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ONE"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
   });
 });
 
@@ -456,8 +463,8 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
     const sendFn = vi.fn();
     controller.scheduleRetry(sendFn, ui);
 
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("● PVP ON (第 1 次重试)");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["● PVP ON (第 1 次重试)"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 1 次重试)");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on (第 1 次重试)"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
   });
 
@@ -469,12 +476,10 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
     } as any;
 
     const persistentStatus = formatPvpStatus("persistent", 0, mockTheme);
-    expect(persistentStatus).toBe("[fg:accent]●[/fg] [b][fg:accent]PVP[/fg][/b] [fg:accent]ON[/fg]");
+    expect(persistentStatus).toBe("[fg:muted]pvp on[/fg]");
 
     const oneStatus = formatPvpStatus("one", 2, mockTheme);
-    expect(oneStatus).toBe(
-      "[fg:warning]●[/fg] [b][fg:warning]PVP[/fg][/b] [fg:warning]ONE[/fg] [fg:dim](第 2 次重试)[/fg]"
-    );
+    expect(oneStatus).toBe("[fg:muted]pvp one[/fg] [fg:dim](第 2 次重试)[/fg]");
   });
 
   it("works gracefully when setWidget is undefined (headless / minimal UI context)", () => {
@@ -496,8 +501,8 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
       controller.disable(headlessUi);
     }).not.toThrow();
 
-    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "● PVP ON");
-    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "● PVP ON (第 1 次重试)");
+    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "pvp on");
+    expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, "pvp on (第 1 次重试)");
     expect(headlessUi.setStatus).toHaveBeenCalledWith(PVP_STATUS_KEY, undefined);
   });
 });

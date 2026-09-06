@@ -27,8 +27,8 @@ export interface TurnEndResult {
 
 /**
  * Format status indicator text conforming to Pi native TUI styling.
- * Uses native theme colors (accent / warning / dim), standard dot indicator (●),
- * and avoids oversized emojis or harsh square brackets.
+ * Uses native theme muted/dim colors, clean lowercase text ('pvp on' / 'pvp one'),
+ * matching the exact font size, baseline, and gray tone of native status bar items.
  */
 export function formatPvpStatus(
   mode: Exclude<PvpMode, "off">,
@@ -36,20 +36,13 @@ export function formatPvpStatus(
   theme?: ExtensionUIContext["theme"]
 ): string {
   const isOne = mode === "one";
-  const colorRole = isOne ? "warning" : "accent";
+  const label = isOne ? "pvp one" : "pvp on";
 
   const fg = (color: "accent" | "warning" | "muted" | "dim", text: string): string => {
     return theme ? theme.fg(color, text) : text;
   };
-  const bold = (text: string): string => {
-    return theme ? theme.bold(text) : text;
-  };
 
-  const dot = fg(colorRole, "●");
-  const badge = bold(fg(colorRole, "PVP"));
-  const label = fg(colorRole, isOne ? "ONE" : "ON");
-
-  let status = `${dot} ${badge} ${label}`;
+  let status = fg("muted", label);
   if (attemptCount > 0) {
     status += ` ${fg("dim", `(第 ${attemptCount} 次重试)`)}`;
   }
@@ -108,7 +101,7 @@ export class PvpController {
     return this.lastError;
   }
 
-  /** Update footer status and persistent widget docked below the editor with native styling. */
+  /** Update footer status and persistent widget docked below the editor with native styling and zero indentation. */
   private updateUi(ui: PvpUi): void {
     if (this.mode === "off") {
       ui.setStatus(PVP_STATUS_KEY, undefined);
@@ -122,7 +115,18 @@ export class PvpController {
 
     ui.setStatus(PVP_STATUS_KEY, styledText);
     if (typeof ui.setWidget === "function") {
-      ui.setWidget(PVP_WIDGET_KEY, [styledText], { placement: "belowEditor" });
+      const mode = this.mode;
+      const attemptCount = this.attemptCount;
+      ui.setWidget(
+        PVP_WIDGET_KEY,
+        (_tui, theme) => ({
+          render(_width: number): string[] {
+            return [formatPvpStatus(mode, attemptCount, theme)];
+          },
+          invalidate(): void {},
+        }),
+        { placement: "belowEditor" }
+      );
     }
   }
 
