@@ -27,8 +27,8 @@ export default function pvpExtension(pi: ExtensionAPI): void {
   });
 
   // Track the most recent user prompt and any attached images
-  pi.on("before_agent_start", (event) => {
-    controller.recordPrompt(event.prompt, event.images);
+  pi.on("before_agent_start", (event, ctx) => {
+    controller.recordPrompt(event.prompt, event.images, ctx.ui);
   });
 
   // Bypass pi core's built-in exponential backoff retry when PVP is active

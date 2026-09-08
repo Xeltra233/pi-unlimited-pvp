@@ -66,7 +66,7 @@ export class PvpController {
   private pendingRetry: boolean = false;
   private retryTimer: NodeJS.Timeout | undefined = undefined;
   private attemptCount: number = 0;
-  private isRetrying: boolean = false;
+  private retryInFlight: boolean = false;
   private lastError: string | undefined = undefined;
 
   get currentMode(): PvpMode {
@@ -79,6 +79,10 @@ export class PvpController {
 
   get isPendingRetry(): boolean {
     return this.pendingRetry;
+  }
+
+  get isRetryInFlight(): boolean {
+    return this.retryInFlight;
   }
 
   get currentAttempt(): number {
@@ -135,6 +139,7 @@ export class PvpController {
     this.cancelRetry();
     this.mode = mode;
     this.attemptCount = 0;
+    this.retryInFlight = false;
     this.lastError = undefined;
     this.updateUi(ui);
   }
@@ -146,16 +151,28 @@ export class PvpController {
     this.lastPrompt = undefined;
     this.lastImages = undefined;
     this.attemptCount = 0;
+    this.retryInFlight = false;
     this.lastError = undefined;
     this.updateUi(ui);
   }
 
   /** Record prompt and images submitted by the user or agent run. */
-  recordPrompt(prompt: string, images?: PvpImageContent[]): void {
+  recordPrompt(prompt: string, images?: PvpImageContent[], ui?: PvpUi): void {
     this.lastPrompt = prompt;
     this.lastImages = images && images.length > 0 ? [...images] : undefined;
-    if (!this.isRetrying && !this.pendingRetry) {
+
+    if (this.retryInFlight) {
+      // This run is the PVP automatic retry in flight: preserve attempt count and consume flag
+      this.retryInFlight = false;
+    } else {
+      // This is a fresh prompt from the user: cancel pending retry and reset counter to zero
+      this.cancelRetry();
+      const hadAttempts = this.attemptCount > 0 || this.lastError !== undefined;
       this.attemptCount = 0;
+      this.lastError = undefined;
+      if (hadAttempts && ui && this.enabled) {
+        this.updateUi(ui);
+      }
     }
   }
 
@@ -204,12 +221,17 @@ export class PvpController {
     // User or system abort: cancel any retry and never retry
     if (stopReason === "aborted") {
       this.cancelRetry();
+      this.attemptCount = 0;
+      this.lastError = undefined;
+      this.retryInFlight = false;
+      this.updateUi(ui);
       return { shouldRetry: false, success: false };
     }
 
     // Model turn failed: flag for retry
     if (stopReason === "error") {
       this.pendingRetry = true;
+      this.retryInFlight = false;
       this.lastError = "errorMessage" in message && typeof message.errorMessage === "string"
         ? message.errorMessage
         : "Unknown error";
@@ -220,6 +242,7 @@ export class PvpController {
     if (stopReason === "stop" || stopReason === "length") {
       this.pendingRetry = false;
       this.attemptCount = 0;
+      this.retryInFlight = false;
       this.lastError = undefined;
 
       if (this.mode === "one") {
@@ -269,11 +292,12 @@ export class PvpController {
         return;
       }
 
-      this.isRetrying = true;
+      this.retryInFlight = true;
       try {
         sendFn(promptToRetry, imagesToRetry);
-      } finally {
-        this.isRetrying = false;
+      } catch (error) {
+        this.retryInFlight = false;
+        throw error;
       }
     }, 0);
 
@@ -287,6 +311,7 @@ export class PvpController {
       this.retryTimer = undefined;
     }
     this.pendingRetry = false;
+    this.retryInFlight = false;
   }
 
   /** Apply the public `/pvp [on|one|off]` command grammar. */

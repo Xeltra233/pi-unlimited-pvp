@@ -139,23 +139,37 @@ describe("PVP Extension End-to-End Lifecycle", () => {
 
     turnEnd({ type: "turn_end", turnIndex: 0, message: errorMsg, toolResults: [] }, ctx);
 
-    // Agent run settles -> schedules immediate retry
+    // Agent run settles -> schedules immediate retry 1
     agentSettled({ type: "agent_settled" }, ctx);
     vi.runAllTimers();
 
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].content).toBe("Build a feature");
     expect(sentMessages[0].options?.deliverAs).toBe("followUp");
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 1 次重试)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on (第 1 次重试)"]);
 
-    // 4. Turn 2 fails again (infinite retry)
+    // Pi starts the retried agent run, firing before_agent_start for the retry
+    beforeAgentStart({ type: "before_agent_start", prompt: "Build a feature" }, ctx);
+    // Counter must remain at 1, NOT reset to 0!
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 1 次重试)");
+
+    // 4. Turn 2 fails again -> schedules retry 2
     turnEnd({ type: "turn_end", turnIndex: 1, message: errorMsg, toolResults: [] }, ctx);
     agentSettled({ type: "agent_settled" }, ctx);
     vi.runAllTimers();
 
     expect(sentMessages).toHaveLength(2);
     expect(sentMessages[1].content).toBe("Build a feature");
+    // Must accurately increment to attempt 2!
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 2 次重试)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on (第 2 次重试)"]);
 
-    // Turn 3 succeeds
+    // Pi starts retry run 2:
+    beforeAgentStart({ type: "before_agent_start", prompt: "Build a feature" }, ctx);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 2 次重试)");
+
+    // 5. Turn 3 succeeds!
     const successMsg = {
       role: "assistant",
       content: [{ type: "text", text: "Done!" }],
@@ -163,7 +177,25 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     };
     turnEnd({ type: "turn_end", turnIndex: 2, message: successMsg, toolResults: [] }, ctx);
 
-    // Persistent mode keeps status bar and widget active
+    // Success resets count: status bar and widget must return to clean "pvp on" without retry count
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
+
+    // 6. Subsequent new prompt failure must restart counting from 1
+    beforeAgentStart({ type: "before_agent_start", prompt: "New separate task" }, ctx);
+    turnEnd({ type: "turn_end", turnIndex: 0, message: errorMsg, toolResults: [] }, ctx);
+    agentSettled({ type: "agent_settled" }, ctx);
+    vi.runAllTimers();
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on (第 1 次重试)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on (第 1 次重试)"]);
+
+    // 7. Aborting the turn cancels retry and cleans up status bar back to "pvp on"
+    const abortMsg = {
+      role: "assistant",
+      content: [],
+      stopReason: "aborted",
+    };
+    turnEnd({ type: "turn_end", turnIndex: 1, message: abortMsg, toolResults: [] }, ctx);
     expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp on");
     expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
 
