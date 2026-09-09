@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  formatPvpStatus,
   getPvpArgumentCompletions,
+  installPvpRetryHook,
   PvpController,
   PVP_STATUS_KEY,
   PVP_WIDGET_KEY,
@@ -17,6 +19,7 @@ import {
  */
 export default function pvpExtension(pi: ExtensionAPI): void {
   const controller = new PvpController();
+  const uninstallHook = installPvpRetryHook(controller);
 
   pi.registerCommand("pvp", {
     description: "Enable resident or one-success unlimited retry mode (/pvp, /pvp on, /pvp one, /pvp off)",
@@ -26,44 +29,19 @@ export default function pvpExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Track the most recent user prompt and any attached images
-  pi.on("before_agent_start", (event, ctx) => {
-    controller.recordPrompt(event.prompt, event.images, ctx.ui);
+  // Track new user prompt submission to reset retry count
+  pi.on("before_agent_start", (_event, ctx) => {
+    controller.handleNewPrompt(ctx.ui);
   });
 
-  // Bypass pi core's built-in exponential backoff retry when PVP is active
-  pi.on("message_end", (event) => {
-    const replacement = controller.handleMessageEnd(event.message);
-    if (replacement) {
-      return { message: replacement };
-    }
-  });
-
-  // Observe turn results: error triggers pending retry; success resets or closes
+  // Observe turn results: success resets/closes mode; abort cancels
   pi.on("turn_end", (event, ctx) => {
     controller.handleTurnEnd(event.message, ctx.ui);
   });
 
-  // Once the agent run has settled, dispatch immediate retry if pending
-  pi.on("agent_settled", (_event, ctx) => {
-    controller.scheduleRetry((prompt, images) => {
-      try {
-        if (images && images.length > 0) {
-          pi.sendUserMessage(
-            [{ type: "text", text: prompt }, ...images],
-            { deliverAs: "followUp" }
-          );
-        } else {
-          pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-        }
-      } catch {
-        // Guard against unexpected send failures
-      }
-    }, ctx.ui);
-  });
-
   // Ensure clean teardown when session shuts down
   pi.on("session_shutdown", (_event, ctx) => {
+    uninstallHook();
     controller.cleanup(ctx.ui);
   });
 }
@@ -71,6 +49,7 @@ export default function pvpExtension(pi: ExtensionAPI): void {
 export {
   formatPvpStatus,
   getPvpArgumentCompletions,
+  installPvpRetryHook,
   PvpController,
   PVP_STATUS_KEY,
   PVP_WIDGET_KEY,

@@ -1,6 +1,6 @@
 {
   "name": "pi-unlimited-pvp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension providing unlimited retry mode (/pvp) for model requests until success",
   "type": "module",
   "main": "src/index.ts",
