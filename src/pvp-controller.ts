@@ -420,96 +420,112 @@ export class PvpController {
 let activeHookCleanup: (() => void) | undefined = undefined;
 
 /**
- * Install the native AgentSession prototype retry hooks.
- *
- * Intercepts Pi core's `_isRetryableError` and `_prepareRetry`:
- * - When PVP is active, any assistant error (except context overflow and user abort)
- *   is treated as retryable.
- * - `_prepareRetry` pops the failed assistant message from `agent.state.messages`
- *   and yields immediately (0ms delay), returning true.
- * - Pi core's `while (await this._handlePostAgentRun())` then executes
- *   `await this.agent.continue()`, performing a true in-place native retry
- *   WITHOUT sending any user messages.
+ * Native retry adapter for Pi 0.84.2–0.87.1.
+ * 0.87+ requires durable context omission; older hosts keep retry context in memory.
+ * Keep the host's prompt/continue loop, without injecting another user message.
  */
 export function installPvpRetryHook(controller: PvpController): () => void {
   activeHookCleanup?.();
-
-  try {
-    const sessionProto = AgentSession.prototype as any;
-    const origIsRetryable = sessionProto._isRetryableError;
-    const origPrepareRetry = sessionProto._prepareRetry;
-
-    sessionProto._isRetryableError = function (message: any): boolean {
-      if (controller.enabled) {
-        if (message?.stopReason === "aborted") return false;
-        if (origIsRetryable && origIsRetryable.call(this, message)) return true;
-        const errorText = (message?.errorMessage || "").toLowerCase();
-        const isOverflow =
-          errorText.includes("context") &&
-          (errorText.includes("overflow") ||
-            errorText.includes("too long") ||
-            errorText.includes("exceed"));
-        if (isOverflow) return false;
-        if (message?.stopReason === "error") return true;
-      }
-      return origIsRetryable ? origIsRetryable.call(this, message) : false;
-    };
-
-    sessionProto._prepareRetry = async function (message: any): Promise<boolean> {
-      if (controller.enabled) {
-        const self = this as any;
-        const ui = self._extensionUIContext;
-        const error = typeof message?.errorMessage === "string" ? message.errorMessage : undefined;
-        controller.recordRetryAttempt(ui, error);
-
-        // Remove error assistant message from agent state so agent continues in place
-        const messages = self.agent?.state?.messages;
-        if (
-          Array.isArray(messages) &&
-          messages.length > 0 &&
-          messages[messages.length - 1]?.role === "assistant"
-        ) {
-          self.agent.state.messages = messages.slice(0, -1);
-        }
-
-        // Yield immediately to event loop with abort signal check
-        self._retryAbortController = new AbortController();
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const signal = self._retryAbortController?.signal;
-            if (signal?.aborted) return reject(new Error("Aborted"));
-            const timer = setTimeout(resolve, 0);
-            signal?.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                reject(new Error("Aborted"));
-              },
-              { once: true }
-            );
-          });
-        } catch {
-          self._retryAttempt = 0;
-          controller.handleAbort(ui);
-          return false;
-        } finally {
-          self._retryAbortController = undefined;
-        }
-
-        return true;
-      }
-      return origPrepareRetry ? origPrepareRetry.call(this, message) : false;
-    };
-
-    const cleanup = () => {
-      sessionProto._isRetryableError = origIsRetryable;
-      sessionProto._prepareRetry = origPrepareRetry;
-    };
-    activeHookCleanup = cleanup;
-    return cleanup;
-  } catch {
-    return () => {};
+  const sessionProto = AgentSession.prototype as any;
+  const origIsRetryable = sessionProto._isRetryableError;
+  const origPrepareRetry = sessionProto._prepareRetry;
+  if (typeof origIsRetryable !== "function" || typeof origPrepareRetry !== "function") {
+    throw new Error("PVP: incompatible Pi retry API; expected _isRetryableError and _prepareRetry");
   }
+  let installed = true;
+  const waits = new Set<AbortController>();
+  // Pi <=0.85 has no run-level abort latch: an abort during turn_end can be
+  // lost before the post-run retry check. Track it until the next prompt run.
+  const cancelledRuns = new WeakSet<object>();
+  const origAbort = sessionProto.abort;
+  const origRunPrompt = sessionProto._runAgentPrompt;
+  if (typeof origAbort !== "function" || typeof origRunPrompt !== "function") {
+    throw new Error("PVP: incompatible Pi run lifecycle API");
+  }
+  const abort = function (this: any, ...args: any[]) {
+    if (installed && controller.enabled) {
+      cancelledRuns.add(this);
+      controller.handleAbort(this._extensionUIContext);
+    }
+    return origAbort.apply(this, args);
+  };
+  const runPrompt = function (this: any, ...args: any[]) {
+    cancelledRuns.delete(this);
+    return origRunPrompt.apply(this, args);
+  };
+
+  const isRetryable = function (this: any, message: any): boolean {
+    if (!installed || !controller.enabled) return origIsRetryable.call(this, message);
+    if (cancelledRuns.has(this) || this._agentRunAbortRequested || message?.stopReason === "aborted") return false;
+    if (origIsRetryable.call(this, message)) return true;
+    const errorText = (typeof message?.errorMessage === "string" ? message.errorMessage : "").toLowerCase();
+    const isOverflow = errorText.includes("context") &&
+      (errorText.includes("overflow") || errorText.includes("too long") || errorText.includes("exceed"));
+    return !isOverflow && message?.stopReason === "error";
+  };
+
+  const prepareRetry = async function (this: any, message: any): Promise<boolean> {
+    if (!installed || !controller.enabled) return origPrepareRetry.call(this, message);
+    if (cancelledRuns.has(this) || this._agentRunAbortRequested || message?.stopReason !== "error") return false;
+    const ui = this._extensionUIContext;
+    const error = typeof message?.errorMessage === "string" ? message.errorMessage : undefined;
+
+    // Do not fall back to slicing if durable omission fails: that would silently
+    // resurrect a failed reply on the next SessionManager projection refresh.
+    if (typeof this._omitRecoveryAttempt === "function") {
+      this._omitRecoveryAttempt(message);
+    } else {
+      const messages = this.agent?.state?.messages;
+      if (Array.isArray(messages) && messages.at(-1)?.role === "assistant") {
+        this.agent.state.messages = messages.slice(0, -1);
+      }
+    }
+
+    const abortController = new AbortController();
+    this._retryAbortController = abortController;
+    waits.add(abortController);
+    const { signal } = abortController;
+    try {
+      controller.recordRetryAttempt(ui, error);
+      // A zero-delay yield lets Escape/Ctrl+C, /pvp off and reload interrupt.
+      const elapsed = await new Promise<boolean>((resolve) => {
+        if (signal.aborted) { resolve(false); return; }
+        const onAbort = () => { clearTimeout(timer); resolve(false); };
+        const timer = setTimeout(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(true);
+        }, 0);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      if (!elapsed || !installed || !controller.enabled || cancelledRuns.has(this) || this._agentRunAbortRequested) {
+        this._retryAttempt = 0;
+        controller.handleAbort(ui);
+        return false;
+      }
+      return true;
+    } finally {
+      waits.delete(abortController);
+      if (this._retryAbortController === abortController) this._retryAbortController = undefined;
+    }
+  };
+
+  sessionProto._isRetryableError = isRetryable;
+  sessionProto._prepareRetry = prepareRetry;
+  sessionProto.abort = abort;
+  sessionProto._runAgentPrompt = runPrompt;
+  const cleanup = () => {
+    if (!installed) return;
+    installed = false;
+    for (const wait of waits) wait.abort();
+    // An old session's shutdown must not tear down a new runtime or later hook.
+    if (sessionProto._isRetryableError === isRetryable) sessionProto._isRetryableError = origIsRetryable;
+    if (sessionProto._prepareRetry === prepareRetry) sessionProto._prepareRetry = origPrepareRetry;
+    if (sessionProto.abort === abort) sessionProto.abort = origAbort;
+    if (sessionProto._runAgentPrompt === runPrompt) sessionProto._runAgentPrompt = origRunPrompt;
+    if (activeHookCleanup === cleanup) activeHookCleanup = undefined;
+  };
+  activeHookCleanup = cleanup;
+  return cleanup;
 }
 
 export function getPvpArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {

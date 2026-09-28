@@ -113,6 +113,34 @@ npm run build
 
 ---
 
+## Pi 版本兼容
+
+0.2.1 已用真实 pi CLI 验证以下版本：
+
+| Pi 版本 | 失败回复处理 |
+| --- | --- |
+| 0.84.2、0.84.3、0.84.4 | 内存上下文移除 |
+| 0.85.0、0.85.1 | 内存上下文移除 |
+| 0.86.0、0.86.1 | 内存上下文移除，保留宿主取消标记 |
+| 0.87.0、0.87.1 | 原生持久化上下文排除（`_omitRecoveryAttempt`） |
+
+0.87 起，Pi 从会话记录重建模型上下文；旧插件只删除内存消息会导致失败回复重新出现，并报 `Cannot continue from message role: assistant`。现在按宿主能力选择处理方式，不重复发送用户提示词。旧版的运行中取消也会阻止随后发生的 PVP 重试。
+
+每个版本验证 5 个真实 CLI 场景：`one`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。界面样式没有改动；本轮没有进行 TUI 视觉验收。
+
+```bash
+# 测试当前开发依赖的真实 CLI
+node test/compat-cli.mjs
+# 测试另一个已安装版本（目录中需有该版本的 package.json 和依赖）
+node test/compat-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
+# 更新已通过 Git 安装的插件
+pi update https://github.com/Xeltra233/pi-unlimited-pvp
+```
+
+更新后在已打开的 Pi 会话运行 `/reload`，或重新启动 Pi。插件依赖宿主内部方法，未验证版本不承诺兼容；缺失必要接口时会明确报错。
+
+---
+
 ## 🗑️ 卸载方法
 
 1. 若通过 `pi install` 安装：
