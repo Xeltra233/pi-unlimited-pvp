@@ -130,7 +130,7 @@ npm run build
 
 每个版本验证 5 个真实 CLI 场景：`1`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。
 
-0.2.2 另验证 goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` 触发 abort 时，`Upstream stream disconnected` 在 0.84.4 与 0.87.1 上均完成重试并成功返回；`/pvp 1`、`/pvp 3` 同样通过，`off` 不重试。界面样式没有改动；本轮没有进行 TUI 视觉验收。
+0.2.2 另验证 goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` 触发 abort 时，`Upstream stream disconnected` 在 0.84.2–0.87.1 全部 9 个版本上均完成重试并成功返回（每版本 4 场景）；`/pvp 1`、`/pvp 3` 同样通过，`off` 不重试。真实 goal 扩展 + TUI（0.87.1）同样实测通过。界面样式没有改动；本轮没有进行 TUI 视觉验收。
 
 ```bash
 # 测试当前开发依赖的真实 CLI
