@@ -70,17 +70,37 @@ describe("PvpController State & Commands", () => {
     expect(ui.notifications[1]?.msg).toBe("PVP ON");
   });
 
-  it("handles '/pvp one' to enable one-success mode", () => {
+  it("handles '/pvp <n>' to enable bounded mode that turns off after n successes", () => {
     const controller = new PvpController();
     const ui = createMockUi();
 
-    controller.handleCommand("one", { ui });
-    expect(controller.currentMode).toBe("one");
+    controller.handleCommand("3", { ui });
+    expect(controller.currentMode).toBe("limited");
+    expect(controller.currentSuccessTarget).toBe(3);
+    expect(controller.currentSuccessCount).toBe(0);
     expect(controller.enabled).toBe(true);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 3");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 3"]);
     expect(ui.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
-    expect(ui.notifications[0]?.msg).toBe("PVP ONE");
+    expect(ui.notifications[0]?.msg).toBe("PVP 3");
+
+    // Multi-digit targets and re-enabling with another target
+    controller.handleCommand("12", { ui });
+    expect(controller.currentSuccessTarget).toBe(12);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 12");
+    expect(ui.notifications[1]?.msg).toBe("PVP 12");
+  });
+
+  it("rejects non-positive and non-numeric targets and the removed 'one' keyword", () => {
+    const controller = new PvpController();
+    const ui = createMockUi();
+
+    for (const arg of ["0", "-2", "1.5", "one", "abc"]) {
+      ui.notifications.length = 0;
+      controller.handleCommand(arg, { ui });
+      expect(controller.enabled).toBe(false);
+      expect(ui.notifications[0]?.type).toBe("warning");
+    }
   });
 
   it("handles '/pvp off' to disable and clear status and widget", () => {
@@ -113,21 +133,19 @@ describe("PvpController State & Commands", () => {
   it("provides argument completions correctly", () => {
     expect(getPvpArgumentCompletions("")).toEqual([
       { value: "on", label: "on" },
-      { value: "one", label: "one" },
       { value: "off", label: "off" },
     ]);
     expect(getPvpArgumentCompletions("o")).toEqual([
       { value: "on", label: "on" },
-      { value: "one", label: "one" },
       { value: "off", label: "off" },
     ]);
     expect(getPvpArgumentCompletions("on")).toEqual([
       { value: "on", label: "on" },
-      { value: "one", label: "one" },
     ]);
     expect(getPvpArgumentCompletions("of")).toEqual([
       { value: "off", label: "off" },
     ]);
+    expect(getPvpArgumentCompletions("3")).toBeNull();
     expect(getPvpArgumentCompletions("invalid")).toBeNull();
   });
 });
@@ -422,12 +440,12 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
   });
 
-  it("one mode automatically closes upon success and removes status and widget", () => {
+  it("bounded mode closes automatically after the n-th success and removes status and widget", () => {
     const controller = new PvpController();
     const ui = createMockUi();
-    controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
+    controller.enable("limited", ui, 1);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 1");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 1"]);
 
     const successMessage: PvpAgentMessage = {
       role: "assistant",
@@ -447,15 +465,15 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(controller.currentMode).toBe("off");
     expect(ui.statuses[PVP_STATUS_KEY]).toBeUndefined();
     expect(ui.widgets[PVP_WIDGET_KEY]?.content).toBeUndefined();
-    expect(ui.notifications.some((n) => n.msg === "PVP OFF")).toBe(true);
+    expect(ui.notifications.some((n) => n.msg === "PVP OFF (已达 1 次成功)")).toBe(true);
   });
 
-  it("one mode does not close on intermediate toolUse turns", () => {
+  it("bounded mode does not close on intermediate toolUse turns", () => {
     const controller = new PvpController();
     const ui = createMockUi();
-    controller.enable("one", ui);
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
+    controller.enable("limited", ui, 2);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 2");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 2"]);
 
     const toolUseMessage: PvpAgentMessage = {
       role: "assistant",
@@ -472,9 +490,100 @@ describe("PvpController Turn Outcomes & Retries", () => {
     expect(result.success).toBe(false);
     expect(result.shouldRetry).toBe(false);
     expect(controller.enabled).toBe(true);
-    expect(controller.currentMode).toBe("one");
-    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp one");
-    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
+    expect(controller.currentMode).toBe("limited");
+    expect(controller.currentSuccessCount).toBe(0);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 2");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 2"]);
+  });
+
+  it("bounded mode counts successes only, keeps PVP on until the n-th success, then closes", () => {
+    const controller = new PvpController();
+    const ui = createMockUi();
+    controller.handleCommand("3", { ui });
+
+    const success: PvpAgentMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "ok" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const failure: PvpAgentMessage = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Upstream stream disconnected",
+      timestamp: Date.now(),
+    };
+
+    // Failures never consume the success target
+    controller.handleTurnEnd(failure, ui);
+    expect(controller.currentSuccessCount).toBe(0);
+    expect(controller.enabled).toBe(true);
+
+    controller.handleTurnEnd(success, ui);
+    expect(controller.currentSuccessCount).toBe(1);
+    expect(controller.enabled).toBe(true);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 3 (1/3)");
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 3 (1/3)"]);
+
+    controller.handleTurnEnd(success, ui);
+    expect(controller.currentSuccessCount).toBe(2);
+    expect(ui.statuses[PVP_STATUS_KEY]).toBe("pvp 3 (2/3)");
+
+    const result = controller.handleTurnEnd(success, ui);
+    expect(result.success).toBe(true);
+    expect(controller.enabled).toBe(false);
+    expect(controller.currentMode).toBe("off");
+    expect(ui.statuses[PVP_STATUS_KEY]).toBeUndefined();
+    expect(ui.widgets[PVP_WIDGET_KEY]?.content).toBeUndefined();
+    expect(ui.notifications.some((n) => n.msg === "PVP OFF (已达 3 次成功)")).toBe(true);
+  });
+
+  it("recognises only the recorded stream-disconnect failure as the force-retry abort case", () => {
+    const controller = new PvpController();
+    const ui = createMockUi();
+    const errorMessage: PvpAgentMessage = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Upstream stream disconnected",
+      timestamp: 1,
+    };
+
+    // Disabled: never treats an abort as a retryable failure
+    expect(controller.shouldForceRetryOverAbort(errorMessage)).toBe(false);
+
+    controller.enable("persistent", ui);
+    // Enabled but nothing failed yet
+    expect(controller.shouldForceRetryOverAbort(errorMessage)).toBe(false);
+
+    controller.handleTurnEnd(errorMessage, ui);
+    expect(controller.shouldForceRetryOverAbort(errorMessage)).toBe(true);
+    // Only the recorded failure instance qualifies
+    expect(controller.shouldForceRetryOverAbort({ ...errorMessage, timestamp: 2 })).toBe(false);
+    expect(controller.shouldForceRetryOverAbort({ ...errorMessage, errorMessage: "rate limit" })).toBe(false);
+    expect(controller.shouldForceRetryOverAbort(undefined)).toBe(false);
+
+    // Unrelated failures replace the recorded turn and are not force-retryable
+    const other: PvpAgentMessage = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "different failure",
+      timestamp: 2,
+    };
+    controller.handleTurnEnd(other, ui);
+    expect(controller.shouldForceRetryOverAbort(errorMessage)).toBe(false);
+    expect(controller.shouldForceRetryOverAbort(other)).toBe(false);
+
+    // A success clears the recorded failure
+    controller.handleTurnEnd({
+      role: "assistant",
+      content: [{ type: "text", text: "ok" }],
+      stopReason: "stop",
+      timestamp: 3,
+    } as PvpAgentMessage, ui);
+    expect(controller.shouldForceRetryOverAbort(other)).toBe(false);
   });
 });
 
@@ -585,8 +694,8 @@ describe("PvpController Abort & Lifecycle Cleanup", () => {
     const persistentStatus = formatPvpStatus("persistent", 0, mockTheme);
     expect(persistentStatus).toBe("[fg:muted]pvp on[/fg]");
 
-    const oneStatus = formatPvpStatus("one", 2, mockTheme);
-    expect(oneStatus).toBe("[fg:muted]pvp one[/fg] [fg:dim](第 2 次重试)[/fg]");
+    const boundedStatus = formatPvpStatus("limited", 2, mockTheme, 3, 1);
+    expect(boundedStatus).toBe("[fg:muted]pvp 3[/fg] [fg:dim](1/3)[/fg] [fg:dim](第 2 次重试)[/fg]");
   });
 
   it("works gracefully when setWidget is undefined (headless / minimal UI context)", () => {

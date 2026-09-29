@@ -12,9 +12,8 @@ import {
  * Pi Unlimited PVP Extension.
  *
  * Provides unlimited automatic retry mode without cooldown and without
- * default retry count limits:
  * - `/pvp` or `/pvp on`: enables resident (persistent) PVP mode.
- * - `/pvp one`: enables one-success PVP mode (turns off upon success).
+ * - `/pvp <n>`: bounded mode, turns off automatically after n successful turns.
  * - `/pvp off`: turns off PVP mode and cleans up footer status.
  */
 export default function pvpExtension(pi: ExtensionAPI): void {
@@ -22,7 +21,7 @@ export default function pvpExtension(pi: ExtensionAPI): void {
   const uninstallHook = installPvpRetryHook(controller);
 
   pi.registerCommand("pvp", {
-    description: "Enable resident or one-success unlimited retry mode (/pvp, /pvp on, /pvp one, /pvp off)",
+    description: "Enable resident retry mode (/pvp, /pvp on) or auto-off after n successes (/pvp <n>); disable with /pvp off",
     getArgumentCompletions: getPvpArgumentCompletions,
     handler: async (args, ctx) => {
       controller.handleCommand(args, ctx);

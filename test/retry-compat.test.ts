@@ -59,7 +59,7 @@ describe("native retry compatibility", () => {
   it("old cleanup cannot uninstall a newer installation", () => {
     const { cleanup } = setup();
     const next = new PvpController();
-    next.enable("one");
+    next.enable("limited", undefined, 1);
     cleanups.push(installPvpRetryHook(next));
     const current = proto._prepareRetry;
     cleanup();
@@ -72,5 +72,47 @@ describe("native retry compatibility", () => {
     proto._prepareRetry = later;
     try { cleanup(); expect(proto._prepareRetry).toBe(later); }
     finally { proto._prepareRetry = original; }
+  });
+
+  it("ignores a foreign abort after a stream-disconnect failure so the retry can run", async () => {
+    const { controller } = setup();
+    const errorMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "Upstream stream disconnected",
+      timestamp: 7,
+    };
+    controller.handleTurnEnd(errorMessage as any);
+
+    const session: any = {
+      _isAgentRunActive: true,
+      _lastAssistantMessage: errorMessage,
+      _extensionUIContext: undefined,
+      agent: { abort: vi.fn() },
+      abortRetry: vi.fn(),
+      isIdle: true,
+    };
+    await proto.abort.call(session);
+    expect(session.abortRetry).not.toHaveBeenCalled();
+    expect(session.agent.abort).not.toHaveBeenCalled();
+  });
+
+  it("forwards aborts for unrelated failures", async () => {
+    const { controller } = setup();
+    const errorMessage = { role: "assistant", stopReason: "error", errorMessage: "rate limit exceeded" };
+    controller.handleTurnEnd(errorMessage as any);
+
+    const session: any = {
+      _isAgentRunActive: true,
+      _lastAssistantMessage: errorMessage,
+      _extensionUIContext: undefined,
+      agent: { abort: vi.fn() },
+      abortRetry: vi.fn(),
+      isIdle: true,
+      waitForIdle: async () => {},
+    };
+    await proto.abort.call(session);
+    expect(session.abortRetry).toHaveBeenCalledTimes(1);
+    expect(session.agent.abort).toHaveBeenCalledTimes(1);
   });
 });

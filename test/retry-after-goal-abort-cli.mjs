@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Accept a package directory (uses that release's actual bin) or a CLI file.
+// Regression: a goal-style extension aborting the run at agent_end after an
+// unclassified provider failure must not cancel PVP's retry. pi >= 0.86 latches
+// `_agentRunAbortRequested` on that abort, which used to skip pi's post-run retry
+// loop before PVP could reconnect "Upstream stream disconnected".
 const target = resolve(process.argv[2] ?? "node_modules/@earendil-works/pi-coding-agent");
 let cli = target;
 if ((await stat(target)).isDirectory()) {
@@ -14,19 +17,20 @@ if ((await stat(target)).isDirectory()) {
   cli = join(target, typeof pkg.bin === "string" ? pkg.bin : pkg.bin.pi);
   console.log(`Testing pi ${pkg.version}`);
 }
-const extension = resolve(process.argv[3] ?? fileURLToPath(new URL("./fixtures/host-extension.ts", import.meta.url)));
+const extension = fileURLToPath(new URL("./fixtures/goal-abort-extension.ts", import.meta.url));
 
-async function runScenario(mode, stop = "") {
-  const root = await mkdtemp(join(tmpdir(), "pvp-compat-"));
+async function runScenario(mode, expectedRequests, expectSuccess) {
+  const root = await mkdtemp(join(tmpdir(), "pvp-goal-abort-"));
   const requests = [];
   const server = createServer(async (req, res) => {
     try {
       let raw = "";
       for await (const chunk of req) raw += chunk;
       requests.push(JSON.parse(raw));
-      if (requests.length <= 3) {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "fixture deliberate failure", type: "invalid_request_error" } }));
+      if (requests.length === 1) {
+        // Mid-stream provider failure; pi surfaces it as "Upstream stream disconnected".
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ error: { message: "Upstream stream disconnected" } })}\n\n`);
         return;
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -39,40 +43,40 @@ async function runScenario(mode, stop = "") {
     await writeFile(join(root, "agent", "settings.json"), JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }));
     const child = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-tools", "--no-session", "--offline", "-e", extension, "--provider", "pvp-fixture", "--model", "fixture", "--thinking", "off", "-p", "Reply FIXTURE_OK"], {
       cwd: root,
-      env: { ...process.env, PI_CODING_AGENT_DIR: join(root, "agent"), PVP_TEST_URL: `http://127.0.0.1:${server.address().port}/v1`, PVP_TEST_MODE: mode, PVP_TEST_STOP: stop, PI_OFFLINE: "1" },
+      env: { ...process.env, PI_CODING_AGENT_DIR: join(root, "agent"), PVP_TEST_URL: `http://127.0.0.1:${server.address().port}/v1`, PVP_TEST_MODE: mode, PI_OFFLINE: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "", timedOut = false;
-    child.stdout.on("data", b => stdout += b);
-    child.stderr.on("data", b => stderr += b);
+    child.stdout.on("data", (b) => stdout += b);
+    child.stderr.on("data", (b) => stderr += b);
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, 30000);
     let code;
     try {
       code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
     } finally { clearTimeout(timer); }
-    console.log(JSON.stringify({ cli, mode, stop, pid: child.pid, code, requests: requests.length, stdout, stderr }));
+    console.log(JSON.stringify({ mode, code, requests: requests.length, stdout, stderr }));
     assert.equal(timedOut, false, "CLI did not settle within 30s");
     assert.match(stderr, new RegExp(`PVP_TEST PVP ${mode.toUpperCase()}`), "real /pvp handler must run");
-    if (stop || mode === "off") {
-      assert.ok(code === 0 || code === 1, "unexpected process exit");
-      assert.equal(requests.length, 1, "off/abort must not issue a retry");
-      if (stop) assert.match(stderr, new RegExp(`PVP_TEST ${stop}`));
-    } else {
+    assert.match(stderr, /PVP_TEST goal-sim abort/, "goal-style agent_end abort must fire");
+    assert.equal(requests.length, expectedRequests, `PVP retry count mismatch for mode ${mode}`);
+    if (expectSuccess) {
       assert.equal(code, 0);
-      assert.equal(requests.length, 4, "PVP must retry 3 non-native-retryable failures with retry.enabled=false");
       assert.match(stdout, /FIXTURE_OK/);
+    } else {
+      assert.equal(code, 1, "PVP off must not retry the failure");
     }
     for (const request of requests) {
-      assert.equal(request.messages.filter(m => m.role === "user").length, 1, "no duplicated user prompts");
-      assert.equal(request.messages.filter(m => m.role === "assistant").length, 0, "failed attempts must stay out of projected context");
+      assert.equal(request.messages.filter((m) => m.role === "user").length, 1, "no duplicated user prompts");
+      assert.equal(request.messages.filter((m) => m.role === "assistant").length, 0, "failed attempts must stay out of projected context");
     }
   } finally {
     server.closeAllConnections();
-    await new Promise(resolve => server.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
     await rm(root, { recursive: true, force: true });
   }
 }
-for (const [mode, stop] of [["1", ""], ["on", ""], ["off", ""], ["on", "abort"], ["on", "off"]]) {
-  await runScenario(mode, stop);
+
+for (const [mode, expectedRequests, expectSuccess] of [["on", 2, true], ["1", 2, true], ["3", 2, true], ["off", 1, false]]) {
+  await runScenario(mode, expectedRequests, expectSuccess);
 }
-console.log("PASS real CLI: /pvp 1 and /pvp on retries, off, abort, off after failure; clean request context; resources closed");
+console.log("PASS real CLI: stream-disconnect retry survives goal-style abort; /pvp <n> and /pvp off behave");

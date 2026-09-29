@@ -213,22 +213,22 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp on"]);
   });
 
-  it("simulates /pvp one flow: failure -> native in-place retry -> success -> automatically closes", async () => {
+  it("simulates /pvp 2 flow: failure -> native in-place retry -> two successes -> automatically closes", async () => {
     const { api, handlers, commands, sentMessages } = createMockExtensionApi();
     pvpExtension(api);
     const ctx = createMockContext();
 
-    // 1. User enters /pvp one
+    // 1. User enters /pvp 2
     const pvpCmd = commands.get("pvp");
-    await pvpCmd.handler("one", ctx);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp one");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one"]);
+    await pvpCmd.handler("2", ctx);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp 2");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 2"]);
     expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
-    expect(ctx.notifications[0]?.msg).toBe("PVP ONE");
+    expect(ctx.notifications[0]?.msg).toBe("PVP 2");
 
     // 2. User submits prompt
     const beforeAgentStart = handlers.get("before_agent_start")![0];
-    beforeAgentStart({ type: "before_agent_start", prompt: "One shot prompt" }, ctx);
+    beforeAgentStart({ type: "before_agent_start", prompt: "Bounded prompt" }, ctx);
 
     // 3. Turn fails -> native retry 1
     const sessionProto = AgentSession.prototype as any;
@@ -237,7 +237,7 @@ describe("PVP Extension End-to-End Lifecycle", () => {
       agent: {
         state: {
           messages: [
-            { role: "user", content: [{ type: "text", text: "One shot prompt" }] },
+            { role: "user", content: [{ type: "text", text: "Bounded prompt" }] },
             { role: "assistant", stopReason: "error", errorMessage: "Network error" },
           ],
         },
@@ -252,10 +252,10 @@ describe("PVP Extension End-to-End Lifecycle", () => {
 
     expect(willRetry).toBe(true);
     expect(sentMessages).toHaveLength(0);
-    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp one (第 1 次重试)");
-    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp one (第 1 次重试)"]);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp 2 (第 1 次重试)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 2 (第 1 次重试)"]);
 
-    // 4. Retry turn succeeds
+    // 4. Retry turn succeeds -> 1 of 2 successes, PVP stays on with progress
     const turnEnd = handlers.get("turn_end")![0];
     const successMsg = {
       role: "assistant",
@@ -263,11 +263,15 @@ describe("PVP Extension End-to-End Lifecycle", () => {
       stopReason: "stop",
     };
     turnEnd({ type: "turn_end", turnIndex: 1, message: successMsg, toolResults: [] }, ctx);
+    expect(ctx.statuses[PVP_STATUS_KEY]).toBe("pvp 2 (1/2)");
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toEqual(["pvp 2 (1/2)"]);
+    expect(ctx.widgets[PVP_WIDGET_KEY]?.options).toEqual({ placement: "belowEditor" });
 
-    // Status bar and widget must be cleared automatically
+    // 5. Second success reaches the target: status bar and widget clear automatically
+    turnEnd({ type: "turn_end", turnIndex: 2, message: successMsg, toolResults: [] }, ctx);
     expect(ctx.statuses[PVP_STATUS_KEY]).toBeUndefined();
     expect(ctx.widgets[PVP_WIDGET_KEY]?.content).toBeUndefined();
-    expect(ctx.notifications.some((n) => n.msg === "PVP OFF")).toBe(true);
+    expect(ctx.notifications.some((n) => n.msg === "PVP OFF (已达 2 次成功)")).toBe(true);
     expect(sentMessages).toHaveLength(0);
   });
 
