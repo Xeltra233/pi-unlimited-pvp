@@ -304,20 +304,24 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     const usage = { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, total: 30 };
 
     // Initial user prompt
-    session.agent.state.messages.push({
+    const userMessage = {
       role: "user",
       content: [{ type: "text", text: "Real task" }],
-    });
+    };
+    session.agent.state.messages.push(userMessage as any);
+    session.sessionManager.appendMessage(userMessage as any);
 
     // Turn 1 fails
-    session.agent.state.messages.push({
+    const errorMessage = {
       role: "assistant",
       stopReason: "error",
       errorMessage: "HTTP 500",
       content: [],
       usage,
-    });
-    session._lastAssistantMessage = session.agent.state.messages[session.agent.state.messages.length - 1];
+    };
+    session.agent.state.messages.push(errorMessage as any);
+    session.sessionManager.appendMessage(errorMessage as any);
+    session._lastAssistantMessage = errorMessage as any;
 
     const willContinue1 = await session._handlePostAgentRun();
     expect(willContinue1).toBe(true);
@@ -326,13 +330,15 @@ describe("PVP Extension End-to-End Lifecycle", () => {
     expect(session.agent.state.messages[0].role).toBe("user");
 
     // Turn 2 succeeds
-    session.agent.state.messages.push({
+    const successMessage = {
       role: "assistant",
       stopReason: "stop",
       content: [{ type: "text", text: "Task done!" }],
       usage,
-    });
-    session._lastAssistantMessage = session.agent.state.messages[session.agent.state.messages.length - 1];
+    };
+    session.agent.state.messages.push(successMessage as any);
+    session.sessionManager.appendMessage(successMessage as any);
+    session._lastAssistantMessage = successMessage as any;
 
     const willContinue2 = await session._handlePostAgentRun();
     expect(willContinue2).toBe(false);

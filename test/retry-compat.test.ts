@@ -108,11 +108,81 @@ describe("native retry compatibility", () => {
       _extensionUIContext: undefined,
       agent: { abort: vi.fn() },
       abortRetry: vi.fn(),
+      abortCompaction: vi.fn(),
+      abortBranchSummary: vi.fn(),
       isIdle: true,
       waitForIdle: async () => {},
     };
     await proto.abort.call(session);
     expect(session.abortRetry).toHaveBeenCalledTimes(1);
     expect(session.agent.abort).toHaveBeenCalledTimes(1);
+  });
+  it("installs on the Pi 1.x _startRun lifecycle", () => {
+    expect(typeof proto._startRun).toBe("function");
+    const controller = new PvpController();
+    controller.enable("persistent");
+    const cleanup = installPvpRetryHook(controller);
+    cleanups.push(cleanup);
+  });
+
+  it("wraps _startRun and forwards its trigger and onStarted arguments", async () => {
+    const original = proto._startRun;
+    const calls: unknown[][] = [];
+    proto._startRun = async function (...args: unknown[]) { calls.push(args); return "ran"; };
+    try {
+      const controller = new PvpController();
+      controller.enable("persistent");
+      const cleanup = installPvpRetryHook(controller);
+      cleanups.push(cleanup);
+      const trigger = { messageType: "user", prompt: "hello" };
+      const onStarted = () => {};
+      const session: any = {};
+      expect(proto._startRun).not.toBe(original);
+      expect(await proto._startRun.call(session, trigger, onStarted)).toBe("ran");
+      expect(calls).toEqual([[trigger, onStarted]]);
+    } finally {
+      proto._startRun = original;
+    }
+  });
+
+  it("wraps only the preferred lifecycle method when both exist", () => {
+    const original = proto._startRun;
+    const legacy = async function () {};
+    proto._runAgentPrompt = legacy;
+    try {
+      const controller = new PvpController();
+      controller.enable("persistent");
+      const cleanup = installPvpRetryHook(controller);
+      cleanups.push(cleanup);
+      expect(proto._startRun).not.toBe(original);
+      expect(proto._runAgentPrompt).toBe(legacy);
+      cleanup();
+      expect(proto._startRun).toBe(original);
+      expect(proto._runAgentPrompt).toBe(legacy);
+    } finally {
+      delete proto._runAgentPrompt;
+    }
+  });
+
+  it("falls back to the pre-1.x _runAgentPrompt lifecycle", async () => {
+    const startRun = proto._startRun;
+    const legacyCalls: unknown[][] = [];
+    const legacy = async function (...args: unknown[]) { legacyCalls.push(args); };
+    delete proto._startRun;
+    proto._runAgentPrompt = legacy;
+    try {
+      const controller = new PvpController();
+      controller.enable("persistent");
+      const cleanup = installPvpRetryHook(controller);
+      cleanups.push(cleanup);
+      expect(proto._runAgentPrompt).not.toBe(legacy);
+      await proto._runAgentPrompt.call({}, "legacy-messages");
+      expect(legacyCalls).toEqual([["legacy-messages"]]);
+      cleanup();
+      expect(proto._runAgentPrompt).toBe(legacy);
+    } finally {
+      delete proto._runAgentPrompt;
+      proto._startRun = startRun;
+    }
   });
 });

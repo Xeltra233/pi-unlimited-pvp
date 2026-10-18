@@ -1,6 +1,6 @@
 import {
   AgentSession,
-  type BeforeAgentStartEvent,
+  type BeforeAgentStartUserEvent,
   type ExtensionCommandContext,
   type ExtensionUIContext,
   type TurnEndEvent,
@@ -11,7 +11,7 @@ export const PVP_WIDGET_KEY = "pi-unlimited-pvp";
 export type PvpMode = "off" | "persistent" | "limited";
 
 export type PvpAgentMessage = TurnEndEvent["message"];
-export type PvpImageContent = NonNullable<BeforeAgentStartEvent["images"]>[number];
+export type PvpImageContent = NonNullable<BeforeAgentStartUserEvent["images"]>[number];
 
 export type PvpUi = Pick<ExtensionUIContext, "notify" | "setStatus"> & {
   setWidget?: ExtensionUIContext["setWidget"];
@@ -506,7 +506,9 @@ export class PvpController {
 let activeHookCleanup: (() => void) | undefined = undefined;
 
 /**
- * Native retry adapter for Pi 0.84.2–0.87.1.
+ * Native retry adapter for Pi 0.84.2–0.87.1 and 1.x.
+ * Pi 1.x renamed the run entry point to `_startRun(trigger, onStarted)`; 0.84–1.1 used
+ * `_runAgentPrompt(messages)`. Prefer the modern method and keep the legacy fallback.
  * 0.87+ requires durable context omission; older hosts keep retry context in memory.
  * Keep the host's prompt/continue loop, without injecting another user message.
  */
@@ -524,10 +526,19 @@ export function installPvpRetryHook(controller: PvpController): () => void {
   // lost before the post-run retry check. Track it until the next prompt run.
   const cancelledRuns = new WeakSet<object>();
   const origAbort = sessionProto.abort;
-  const origRunPrompt = sessionProto._runAgentPrompt;
-  if (typeof origAbort !== "function" || typeof origRunPrompt !== "function") {
-    throw new Error("PVP: incompatible Pi run lifecycle API");
+  // Pi 1.x moved the run entry point to _startRun(trigger, onStarted); pre-1.x hosts
+  // only expose _runAgentPrompt(messages). Wrap exactly one of them.
+  const runLifecycleMethod: "_startRun" | "_runAgentPrompt" | undefined =
+    typeof sessionProto._startRun === "function"
+      ? "_startRun"
+      : typeof sessionProto._runAgentPrompt === "function"
+        ? "_runAgentPrompt"
+        : undefined;
+  const origRunPrompt = runLifecycleMethod ? sessionProto[runLifecycleMethod] : undefined;
+  if (runLifecycleMethod === undefined || typeof origAbort !== "function" || typeof origRunPrompt !== "function") {
+    throw new Error("PVP: incompatible Pi run lifecycle API; expected _startRun or _runAgentPrompt");
   }
+  const lifecycleMethod: "_startRun" | "_runAgentPrompt" = runLifecycleMethod;
   const abort = function (this: any, ...args: any[]) {
     if (installed && controller.enabled) {
       if (this._isAgentRunActive === true && controller.shouldForceRetryOverAbort(this._lastAssistantMessage)) {
@@ -605,7 +616,7 @@ export function installPvpRetryHook(controller: PvpController): () => void {
   sessionProto._isRetryableError = isRetryable;
   sessionProto._prepareRetry = prepareRetry;
   sessionProto.abort = abort;
-  sessionProto._runAgentPrompt = runPrompt;
+  sessionProto[lifecycleMethod] = runPrompt;
   const cleanup = () => {
     if (!installed) return;
     installed = false;
@@ -614,7 +625,7 @@ export function installPvpRetryHook(controller: PvpController): () => void {
     if (sessionProto._isRetryableError === isRetryable) sessionProto._isRetryableError = origIsRetryable;
     if (sessionProto._prepareRetry === prepareRetry) sessionProto._prepareRetry = origPrepareRetry;
     if (sessionProto.abort === abort) sessionProto.abort = origAbort;
-    if (sessionProto._runAgentPrompt === runPrompt) sessionProto._runAgentPrompt = origRunPrompt;
+    if (sessionProto[lifecycleMethod] === runPrompt) sessionProto[lifecycleMethod] = origRunPrompt;
     if (activeHookCleanup === cleanup) activeHookCleanup = undefined;
   };
   activeHookCleanup = cleanup;

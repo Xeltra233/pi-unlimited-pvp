@@ -117,20 +117,24 @@ npm run build
 
 ## Pi 版本兼容
 
-0.2.2 已用真实 pi CLI 验证以下版本：
+0.2.2 已验证 Pi 0.84.2–0.87.1；0.2.3 起同时支持 Pi 1.x。运行入口与失败回复处理方式按宿主版本自动选择：
 
-| Pi 版本 | 失败回复处理 |
-| --- | --- |
-| 0.84.2、0.84.3、0.84.4 | 内存上下文移除 |
-| 0.85.0、0.85.1 | 内存上下文移除 |
-| 0.86.0、0.86.1 | 内存上下文移除，保留宿主取消标记 |
-| 0.87.0、0.87.1 | 原生持久化上下文排除（`_omitRecoveryAttempt`） |
+| Pi 版本 | 运行入口 | 失败回复处理 |
+| --- | --- | --- |
+| 0.84.2、0.84.3、0.84.4 | `_runAgentPrompt` | 内存上下文移除 |
+| 0.85.0、0.85.1 | `_runAgentPrompt` | 内存上下文移除 |
+| 0.86.0、0.86.1 | `_runAgentPrompt` | 内存上下文移除，保留宿主取消标记 |
+| 0.87.0、0.87.1 | `_runAgentPrompt` | 原生持久化上下文排除（`_omitRecoveryAttempt`） |
+| 1.0.4、1.1.0 | `_runAgentPrompt` | 原生持久化上下文排除 |
+| 1.2.0、1.3.0 | `_startRun(trigger, onStarted)` | 原生持久化上下文排除 |
+
+Pi 1.2 起运行入口由 `_runAgentPrompt(messages)` 改为 `_startRun(trigger, onStarted)`。插件安装时优先包装 `_startRun`，旧宿主回退 `_runAgentPrompt`，只包装实际存在的一个，清理时恢复被替换的方法；两者都缺失才报 `incompatible Pi run lifecycle API`。1.0.4、1.2.0 的运行入口为源码静态确认，未单独运行真实 CLI；1.2.0 与 1.3.0 共用同一入口分支。
 
 0.87 起，Pi 从会话记录重建模型上下文；旧插件只删除内存消息会导致失败回复重新出现，并报 `Cannot continue from message role: assistant`。现在按宿主能力选择处理方式，不重复发送用户提示词。旧版的运行中取消也会阻止随后发生的 PVP 重试。
 
-每个版本验证 5 个真实 CLI 场景：`1`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。
+0.2.2 对 0.84.2–0.87.1 每个版本验证 5 个真实 CLI 场景：`1`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。0.2.3 对 1.3.0（`_startRun`）与 1.1.0（`_runAgentPrompt` 回退）复跑同一套场景并全部通过，同时 `npm test` 在 1.3.0 上运行 44 个用例（含 `_startRun` 安装、双入口只包装首选、旧入口回退、`_startRun` 参数转发与真实 `AgentSession` 持久化排除）。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。
 
-0.2.2 另验证 goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` 触发 abort 时，`Upstream stream disconnected` 在 0.84.2–0.87.1 全部 9 个版本上均完成重试并成功返回（每版本 4 场景）；`/pvp 1`、`/pvp 3` 同样通过，`off` 不重试。真实 goal 扩展 + TUI（0.87.1）同样实测通过。界面样式没有改动；本轮没有进行 TUI 视觉验收。
+goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` 触发 abort 时，`Upstream stream disconnected` 在 0.84.2–0.87.1 全部 9 个版本、以及 1.3.0 与 1.1.0 上均完成重试并成功返回（每版本 4 场景）；`/pvp 1`、`/pvp 3` 同样通过，`off` 不重试。真实 goal 扩展 + TUI（0.87.1）同样实测通过。界面样式没有改动；本轮没有进行 TUI 视觉验收。
 
 ```bash
 # 测试当前开发依赖的真实 CLI
