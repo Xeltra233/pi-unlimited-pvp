@@ -49,7 +49,9 @@ export {
   formatPvpStatus,
   getPvpArgumentCompletions,
   installPvpRetryHook,
+  isPvpContextOverflow,
   PvpController,
+  PVP_CONTEXT_OVERFLOW_PATTERNS,
   PVP_STATUS_KEY,
   PVP_WIDGET_KEY,
 } from "./pvp-controller.js";

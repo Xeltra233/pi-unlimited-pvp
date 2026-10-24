@@ -30,6 +30,71 @@ const COMMAND_MODES = ["on", "off"] as const;
  */
 export const PVP_FORCE_RETRY_PATTERN = /stream\s+disconnected/i;
 
+/**
+ * Context-overflow / context-window exhaustion signals.
+ *
+ * These are the provider-side error texts Pi itself treats as "the prompt no
+ * longer fits". They are NOT retryable transport failures: retrying the exact
+ * same prompt can never succeed, and it would starve Pi's own overflow
+ * recovery (compact the session, then retry once). Pi's `_isRetryableError`
+ * already excludes them via `isContextOverflow()`, so PVP must exclude them
+ * too instead of falling back to "any stopReason === error is retryable".
+ *
+ * Kept as a local pattern list (mirroring the providers Pi detects) so the
+ * retry hook never depends on a transitive `@earendil-works/pi-ai` import that
+ * may resolve to a different instance than the host's.
+ */
+export const PVP_CONTEXT_OVERFLOW_PATTERNS: RegExp[] = [
+  /prompt (?:is )?too long/i,
+  /prompt exceeds max length/i,
+  /request_too_large/i,
+  /input is too long for requested model/i,
+  /exceeds the context window/i,
+  /exceeds (?:the )?(?:model'?s )?maximum context length/i,
+  /input token count.*exceeds the maximum/i,
+  /maximum prompt length is \d+/i,
+  /reduce the length of the messages/i,
+  /maximum context length is \d+ tokens/i,
+  /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i,
+  /input \(\d+ tokens\) is longer than the model'?s context length/i,
+  /exceeds the limit of \d+/i,
+  /exceeds the available context size/i,
+  /greater than the context length/i,
+  /context window exceeds limit/i,
+  /exceeded model token limit/i,
+  /too large for model with \d+ maximum context length/i,
+  /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i,
+  /model_context_window_exceeded/i,
+  /prompt too long; exceeded (?:max )?context length/i,
+  /range of input length should be/i,
+  /context[_ ]length[_ ]exceeded/i,
+  /too many tokens/i,
+  /token limit exceeded/i,
+];
+
+/**
+ * Rate-limit / quota wording that also contains overflow-ish phrases
+ * ("too many tokens" from Bedrock throttling) and must stay retryable.
+ */
+const PVP_NON_OVERFLOW_PATTERNS: RegExp[] = [
+  /^(Throttling error|Service unavailable):/i,
+  /rate limit/i,
+  /too many requests/i,
+];
+
+/**
+ * True when the failed assistant message reports context-window exhaustion.
+ * Such failures must fall through to Pi's compaction path, never to a retry.
+ */
+export function isPvpContextOverflow(message: unknown): boolean {
+  const candidate = message as { stopReason?: unknown; errorMessage?: unknown } | undefined;
+  if (!candidate || candidate.stopReason !== "error") return false;
+  const errorMessage = typeof candidate.errorMessage === "string" ? candidate.errorMessage : "";
+  if (errorMessage.length === 0) return false;
+  if (PVP_NON_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))) return false;
+  return PVP_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}
+
 export interface TurnEndResult {
   shouldRetry: boolean;
   success: boolean;
@@ -360,6 +425,20 @@ export class PvpController {
       return { shouldRetry: false, success: false };
     }
 
+    // Context-window exhaustion: hand the turn back to Pi's compaction path so it can
+    // compact and retry once. Never latch a pending retry here — that would resend the
+    // oversized prompt forever and skip auto-compaction entirely.
+    if (isPvpContextOverflow(message)) {
+      this.pendingRetry = false;
+      this.pendingErrorTurnMessage = undefined;
+      this.retryInFlight = false;
+      this.lastError =
+        "errorMessage" in message && typeof message.errorMessage === "string"
+          ? message.errorMessage
+          : "Context overflow";
+      return { shouldRetry: false, success: false };
+    }
+
     // Model turn failed: flag for retry
     if (stopReason === "error") {
       this.pendingRetry = true;
@@ -562,15 +641,19 @@ export function installPvpRetryHook(controller: PvpController): () => void {
     if (!installed || !controller.enabled) return origIsRetryable.call(this, message);
     if (cancelledRuns.has(this) || this._agentRunAbortRequested || message?.stopReason === "aborted") return false;
     if (origIsRetryable.call(this, message)) return true;
-    const errorText = (typeof message?.errorMessage === "string" ? message.errorMessage : "").toLowerCase();
-    const isOverflow = errorText.includes("context") &&
-      (errorText.includes("overflow") || errorText.includes("too long") || errorText.includes("exceed"));
-    return !isOverflow && message?.stopReason === "error";
+    // Context-window exhaustion is recovered by Pi's compaction path
+    // (_checkCompaction → _runAutoCompaction), not by resending the same prompt.
+    // Treating it as retryable is what silently disabled auto-compaction under PVP.
+    if (isPvpContextOverflow(message)) return false;
+    return message?.stopReason === "error";
   };
 
   const prepareRetry = async function (this: any, message: any): Promise<boolean> {
     if (!installed || !controller.enabled) return origPrepareRetry.call(this, message);
     if (cancelledRuns.has(this) || this._agentRunAbortRequested || message?.stopReason !== "error") return false;
+    // Defense in depth: never retry a context overflow even if another hook forced the
+    // classification, and never strip the failed reply from context in that case.
+    if (isPvpContextOverflow(message)) return false;
     const ui = this._extensionUIContext;
     const error = typeof message?.errorMessage === "string" ? message.errorMessage : undefined;
 

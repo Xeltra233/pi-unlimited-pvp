@@ -117,7 +117,7 @@ npm run build
 
 ## Pi 版本兼容
 
-0.2.2 已验证 Pi 0.84.2–0.87.1；0.2.3 起同时支持 Pi 1.x。运行入口与失败回复处理方式按宿主版本自动选择：
+0.2.2 已验证 Pi 0.84.2–0.87.1；0.2.3 起同时支持 Pi 1.x；0.2.4 修复 PVP 开启时自动压缩被跳过的问题。运行入口与失败回复处理方式按宿主版本自动选择：
 
 | Pi 版本 | 运行入口 | 失败回复处理 |
 | --- | --- | --- |
@@ -132,14 +132,17 @@ Pi 1.2 起运行入口由 `_runAgentPrompt(messages)` 改为 `_startRun(trigger,
 
 0.87 起，Pi 从会话记录重建模型上下文；旧插件只删除内存消息会导致失败回复重新出现，并报 `Cannot continue from message role: assistant`。现在按宿主能力选择处理方式，不重复发送用户提示词。旧版的运行中取消也会阻止随后发生的 PVP 重试。
 
-0.2.2 对 0.84.2–0.87.1 每个版本验证 5 个真实 CLI 场景：`1`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。0.2.3 对 1.3.0（`_startRun`）与 1.1.0（`_runAgentPrompt` 回退）复跑同一套场景并全部通过，同时 `npm test` 在 1.3.0 上运行 44 个用例（含 `_startRun` 安装、双入口只包装首选、旧入口回退、`_startRun` 参数转发与真实 `AgentSession` 持久化排除）。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。
+0.2.2 对 0.84.2–0.87.1 每个版本验证 5 个真实 CLI 场景：`1`、`on` 连续失败 3 次后成功；`off` 不重试；失败后 abort；失败后关闭。0.2.3 对 1.3.0（`_startRun`）与 1.1.0（`_runAgentPrompt` 回退）复跑同一套场景并全部通过，同时 `npm test` 在 1.3.0 上运行 66 个用例（含 `_startRun` 安装、双入口只包装首选、旧入口回退、`_startRun` 参数转发与真实 `AgentSession` 持久化排除）。测试使用本地 HTTP 模型服务、独立配置目录，关闭 Pi 原生重试，不使用真实凭据。
 
 goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` 触发 abort 时，`Upstream stream disconnected` 在 0.84.2–0.87.1 全部 9 个版本、以及 1.3.0 与 1.1.0 上均完成重试并成功返回（每版本 4 场景）；`/pvp 1`、`/pvp 3` 同样通过，`off` 不重试。真实 goal 扩展 + TUI（0.87.1）同样实测通过。界面样式没有改动；本轮没有进行 TUI 视觉验收。
+
+自动压缩（`test/auto-compact-cli.mjs`）：PVP 曾把任意 `stopReason: "error"` 都判为可重试，把上下文溢出失败一并吞掉，导致 Pi 的 `_checkCompaction` 永不执行、会话不再自动压缩。现在 `isPvpContextOverflow()` 识别各家提供商的溢出文案（Anthropic / [OI] / OpenRouter / Groq / Google / Ollama 等）并放行给 Pi 的压缩路径，`rate limit`、`Too many requests`、`Throttling error: Too many tokens` 等仍按可重试处理。真实 CLI 验证：溢出场景下 PVP on 与 off 都压缩 1 次并按 `reason=overflow` 重试一次成功；阈值场景 `reason=threshold` 同样压缩 1 次。
 
 ```bash
 # 测试当前开发依赖的真实 CLI
 node test/compat-cli.mjs
 node test/retry-after-goal-abort-cli.mjs
+npx tsx test/auto-compact-cli.mjs
 # 测试另一个已安装版本（目录中需有该版本的 package.json 和依赖）
 node test/compat-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
 node test/retry-after-goal-abort-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
