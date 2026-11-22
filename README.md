@@ -13,11 +13,12 @@ Pi 编码智能体（Pi Coding Agent）的无限自动重试插件。
 - 🎯 **三种运行模式**：
   - **常驻模式（`/pvp` 或 `/pvp on`）**：PVP 状态持续生效；单次请求成功后依然保持开启，适合不稳定网络或高频调优。
   - **计数模式（`/pvp <n>`）**：遇到失败仍无冷却无限重连，**成功累计 n 次后自动关闭 PVP 模式**（失败不计入；`/pvp 1` 等价原来的 `one`）。
-- 📌 **无缝融入原生 TUI 的固定指示（防滚走）**：
-  - 采用组件工厂直接渲染，消除 Pi 内置字符串组件的强制左侧边距，实现 **0 缩进顶格对齐**，与上方的 Git 分支及终端左边缘 100% 垂直平齐。
-  - 严格遵循原生状态栏设计规范，使用标准小写字形（`pvp on` / `pvp 5`）与主题中性灰阶（`theme.fg("muted")`），字体大小、行高、基线完全对齐，低调舒适不刺眼。
-  - 采用 Pi UI 的 Widget 机制（`placement: "belowEditor"`）将状态挂载在输入框下方，并同步更新底部状态栏 `setStatus`，即使聊天产生海量文本向上滚动，状态依然清晰常驻。
-  - 关闭 PVP、计数模式达标后，挂件与状态栏标记均自动彻底移除。
+- 📌 **原生 TUI 状态指示（防滚走）**：
+  - 采用组件工厂直接渲染状态行，避免内置字符串组件的强制左侧边距，尽量贴近终端左边缘；
+  - 使用小写字形（`pvp on` / `pvp 5`）与主题中性灰阶（`theme.fg("muted")`），沿用原生状态栏的视觉风格；
+  - 采用 Pi UI 的 Widget 机制（`placement: "belowEditor"`）将状态挂载在输入框下方，并同步更新底部状态栏 `setStatus`，即使聊天产生海量文本向上滚动，状态依然清晰常驻；
+  - 关闭 PVP、计数模式达标后，挂件与状态栏标记均自动移除。
+  - 具体像素级对齐/外观未做截图验收，以实际宿主主题与终端渲染为准。
 - 💬 **极简明了的切换提示**：
   - 切换模式时统一以最简洁的形式提示：`PVP ON`、`PVP 5`、`PVP OFF`，绝不输出啰嗦多余的长句子。
 - **跨扩展 abort 兼容**：目标类扩展（如 `/goal`）在提供商错误后触发的运行中止不会吃掉 PVP 的重试，`stream disconnected` 类失败在任何场景下都会自动重连。
@@ -44,6 +45,15 @@ pi install git:github.com/Xeltra233/pi-unlimited-pvp
 ```bash
 pi install -l https://github.com/Xeltra233/pi-unlimited-pvp
 ```
+
+**项目级安装（`-l`）要处理项目信任**：`-l` 只是写入 `.pi/settings.json`；项目文件未被授权时 Pi 不载入这些扩展，会话里只有内置命令，`/pvp`、`/wakeguard` 都不出现。启动时带 `--approve` 才加载：
+
+```bash
+cd /path/to/project
+pi --approve
+```
+
+`pi install -l --approve` 里的 `--approve` 只覆盖**那一条 install 命令**（`pi install --help` 自述 “Trust project-local files for this command”），不会让以后的会话自动信任；之后每次在该项目启动仍需 `pi --approve`。
 
 ### 方式 2：本地目录指令安装
 
@@ -92,7 +102,29 @@ pi -e /path/to/pi-unlimited-pvp
    - 收到 `stop` 或 `length` 等正常终结信号即判定为成功，重试计数清零。
    - 计数模式（`/pvp <n>`）每成功一次记 1 次（失败不计入），达到 n 次后自动执行 `disable()` 并发送 `PVP OFF (已达 n 次成功)` 通知。
    - 用户主动按下 `Ctrl+C` 中断时立即停止重试，重试计数清零。
-5. **跨扩展 abort 兼容（如 `/goal`）**：部分扩展在 `agent_end` 里把无法分类的提供商错误当作中断并调用 `ctx.abort()`；该 abort 先于 Pi 的重试判定把运行循环闩死，导致 PVP 再无重试机会。PVP 在待重试错误正是 `stream disconnected` 类失败时吞掉这次 abort，让原生重试照常进行；用户真实的 Esc/Ctrl+C 中断不受影响。
+5. **跨扩展 abort 兼容（如 `/goal`）**：部分扩展在 `agent_end` 里把无法分类的提供商错误当作中断并调用 `ctx.abort()`；该 abort 先于 Pi 的重试判定把运行循环闩死，导致 PVP 再无重试机会。PVP 在待重试错误正是 `stream disconnected` 类失败时吞掉这次 abort，让原生重试照常进行；用户真实的 Esc/Ctrl+C 中断不受影响（重试等待/看门狗门禁挂起期间的取消一律照常生效）。
+6. **可选看门狗协调（不装则行为完全不变）**：若同时加载 `pi-wakeguard` 扩展，PVP 在每次原生重试前通过事件总线频道 `pi-wakeguard:before-retry:v1` 同步询问接口是否可达。
+
+   ```text
+   PvpRetryGateRequest = {
+     version: 1;
+     errorMessage: string;
+     model?: { provider: string; id: string; api: string; baseUrl: string };
+     signal: AbortSignal;
+     wait?: Promise<boolean>;   // 仅由监听方同步赋值
+   }
+   ```
+
+   - 没有任何监听方赋值 `wait`：PVP 完全按原逻辑重试（零行为变化）。
+   - `wait` 尚未落定：本次 run 就地挂起（不 omit 上下文、不计重试次数、不动计数模式的成功计数）；看门狗探测到接口恢复后 `resolve(true)`，同一个 run 继续原生重试。
+   - `resolve(false)`：取消本次 run，不重试，不关闭 PVP、不改变成功计数。
+   - reject（探测过程抛出）：取消本次 run，并只提示固定文案 `PVP: 看门狗探测失败，本次不重试`，不回显可能含秘密的错误文本。
+   - `signal` 会在 `/pvp off`、用户 abort、切换模型、切换/分叉会话、`session_shutdown`/`/reload`、以及用户提交新 prompt 时中止；被取消的门禁即使之后才 `resolve(true)` 也不会复活旧 run。
+   - 看门狗自身默认关闭，需用户显式执行 `/wakeguard on` 才开始探测与接管；关闭状态下新的 PVP 失败保持原行为。启用时它**立即探测一次**，之后按默认 `600000`ms（10 分钟）节律探测，可用 `/wakeguard interval` 调整。
+   - 探针是一次**不带凭据的 `GET <baseUrl>/models`**（带硬超时）。它只能证明端点可达、**不能证明模型真的可用**（鉴权、额度、模型态都不在探针覆盖范围内）；所以恢复后仍由原生重试做真正的裁决。
+   - 分类边界：结构化的 `401` / `403` / `429` / `503` JSON 响应属于**供应商错误**，说明接口是活的，PVP 照常自行重试，看门狗不停泊；只有非结构化的错误页面（如网关 HTML）或传输层/网络故障才触发暂停等待探测。
+   - 该协调只依赖事件总线，不修改 Pi 的 settings/凭据，也不改变 `retry.enabled` 语义。
+
 ---
 
 ## 🛠️ 本地开发与测试
@@ -138,14 +170,18 @@ goal 场景（`test/retry-after-goal-abort-cli.mjs`）：扩展在 `agent_end` �
 
 自动压缩（`test/auto-compact-cli.mjs`）：PVP 曾把任意 `stopReason: "error"` 都判为可重试，把上下文溢出失败一并吞掉，导致 Pi 的 `_checkCompaction` 永不执行、会话不再自动压缩。现在 `isPvpContextOverflow()` 识别各家提供商的溢出文案（Anthropic / [OI] / OpenRouter / Groq / Google / Ollama 等）并放行给 Pi 的压缩路径，`rate limit`、`Too many requests`、`Throttling error: Too many tokens` 等仍按可重试处理。真实 CLI 验证：溢出场景下 PVP on 与 off 都压缩 1 次并按 `reason=overflow` 重试一次成功；阈值场景 `reason=threshold` 同样压缩 1 次。
 
+看门狗门禁（`test/wake-guard-cli.mjs`）：真实 Pi CLI + 本地模型服务，四种监听器形态各跑一次 —— 未注册监听方（等价未安装 pi-wakeguard）、`resolve(true)`、`resolve(false)`、挂起后由 `ctx.abort()` 取消。断言分别落在「与门禁前完全一致的 3 次重试」「门禁真被调用且模型四字段正确」「只发 1 次请求且不重试」「挂起期间无重试并在取消后正常收尾」，并且所有请求的上下文里都没有重复的用户消息或残留的失败回显。`test/wake-guard-gate.test.ts` 另覆盖 omit 前不落盘、计数与模式保持、off/abort/cleanup/新 prompt 取消后不复活、以及 `pi.events` 真实适配与 `model_select`/`session_before_switch` 接线。
+
 ```bash
 # 测试当前开发依赖的真实 CLI
 node test/compat-cli.mjs
 node test/retry-after-goal-abort-cli.mjs
 npx tsx test/auto-compact-cli.mjs
+node test/wake-guard-cli.mjs
 # 测试另一个已安装版本（目录中需有该版本的 package.json 和依赖）
 node test/compat-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
 node test/retry-after-goal-abort-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
+node test/wake-guard-cli.mjs /path/to/node_modules/@earendil-works/pi-coding-agent
 # 更新已通过 Git 安装的插件
 pi update https://github.com/Xeltra233/pi-unlimited-pvp
 ```
@@ -156,9 +192,11 @@ pi update https://github.com/Xeltra233/pi-unlimited-pvp
 
 ## 🗑️ 卸载方法
 
-1. 若通过 `pi install` 安装：
+1. 若通过 `pi install` 安装，用**安装时使用的同一个 source** 移除（本地路径就用路径，Git 源就用该 URL；不能只写包名，路径安装的包名不会被匹配）：
    ```bash
-   pi remove pi-unlimited-pvp
+   pi remove /path/to/pi-unlimited-pvp
+   # 或当初用 Git 源安装的：
+   pi remove https://github.com/Xeltra233/pi-unlimited-pvp
    ```
 2. 若在 `settings.json` 中配置：
    从 `extensions` 数组中移除对应路径即可。

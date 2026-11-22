@@ -10,6 +10,49 @@ export const PVP_STATUS_KEY = "pi-unlimited-pvp";
 export const PVP_WIDGET_KEY = "pi-unlimited-pvp";
 export type PvpMode = "off" | "persistent" | "limited";
 
+/**
+ * Channel used for the optional wake-guard retry gate.
+ *
+ * A wake-guard extension (pi-wakeguard) subscribes to this channel and decides whether the
+ * provider API is reachable before PVP performs a native retry. Without a subscriber the
+ * request stays untouched and PVP behaves exactly as it did before this channel existed.
+ */
+export const PVP_WAKE_GUARD_CHANNEL = "pi-wakeguard:before-retry:v1";
+
+/** Model facts a wake-guard listener may use to probe the provider endpoint. */
+export interface PvpRetryGateModel {
+  provider: string;
+  id: string;
+  api: string;
+  baseUrl: string;
+}
+
+/**
+ * Request emitted synchronously on {@link PVP_WAKE_GUARD_CHANNEL}.
+ *
+ * A listener that takes over the retry decision MUST assign `wait` synchronously inside the
+ * emit call, and MUST turn probe failures into a rejected promise. `undefined` keeps PVP's
+ * native retry (no wake-guard, or wake-guard not engaged). While `wait` is pending the run
+ * stays parked without a retry; resolving `true` resumes the native retry, resolving `false`
+ * cancels this run, and rejecting cancels it with a short fixed notification.
+ * `signal` aborts on /pvp off, abort, model change, session switch/shutdown and reload.
+ */
+export interface PvpRetryGateRequest {
+  version: 1;
+  errorMessage: string;
+  model?: PvpRetryGateModel;
+  signal: AbortSignal;
+  wait?: Promise<boolean>;
+}
+
+/** Synchronous emit adapter used for the wake-guard gate (e.g. `pi.events.emit`). */
+export type PvpRetryGateEmit = (request: PvpRetryGateRequest) => void;
+
+export interface PvpRetryHookOptions {
+  /** Optional gate emit adapter; when absent, PVP never consults a wake-guard. */
+  emitRetryGate?: PvpRetryGateEmit;
+}
+
 export type PvpAgentMessage = TurnEndEvent["message"];
 export type PvpImageContent = NonNullable<BeforeAgentStartUserEvent["images"]>[number];
 
@@ -151,6 +194,7 @@ export class PvpController {
   private lastError: string | undefined = undefined;
   private pendingErrorTurnMessage: PvpAgentMessage | undefined = undefined;
   private activeUi: PvpUi | undefined = undefined;
+  private retryWaits = new Set<AbortController>();
 
   get currentMode(): PvpMode {
     return this.mode;
@@ -204,6 +248,103 @@ export class PvpController {
 
   get lastUi(): PvpUi | undefined {
     return this.activeUi;
+  }
+
+  /** True while a wake-guard gate or native retry wait is outstanding. */
+  get isAwaitingRetryWait(): boolean {
+    return this.retryWaits.size > 0;
+  }
+
+  /**
+   * Track an outstanding wait so cancellation paths (/pvp off, abort, model change,
+   * session switch/shutdown, reload) can interrupt it. Returns an untrack callback.
+   */
+  trackRetryWait(abortController: AbortController): () => void {
+    this.retryWaits.add(abortController);
+    return () => {
+      this.retryWaits.delete(abortController);
+    };
+  }
+
+  /** Abort every outstanding wait without changing mode or success counters. */
+  abortRetryWaits(): void {
+    const controllers = [...this.retryWaits];
+    this.retryWaits.clear();
+    for (const abortController of controllers) {
+      if (!abortController.signal.aborted) {
+        abortController.abort();
+      }
+    }
+  }
+
+  /**
+   * Consult the optional wake-guard gate before a native retry mutates the session.
+   *
+   * `emit` runs synchronously so a listener can attach `request.wait` before it returns.
+   * No listener (wait stays undefined) keeps the retry unchanged. While `wait` is pending
+   * the run is parked; resolving `true` resumes, resolving `false` cancels this run, and a
+   * rejected promise cancels it with a short fixed notification (never the rejection text,
+   * which may contain provider secrets). An aborted signal cancels without notifying.
+   */
+  async awaitRetryGate(
+    emit: PvpRetryGateEmit,
+    input: { errorMessage: string; model?: PvpRetryGateModel },
+    signal: AbortSignal,
+    ui?: PvpUi
+  ): Promise<boolean> {
+    const targetUi = ui ?? this.activeUi;
+    const request: PvpRetryGateRequest = {
+      version: 1,
+      errorMessage: input.errorMessage,
+      model: input.model,
+      signal,
+      wait: undefined,
+    };
+    try {
+      emit(request);
+    } catch {
+      targetUi?.notify("PVP: 看门狗接口调用失败，本次不重试", "error");
+      return false;
+    }
+
+    const wait = request.wait;
+    if (wait === undefined) {
+      return true;
+    }
+    if (typeof wait?.then !== "function") {
+      targetUi?.notify("PVP: 看门狗接口调用失败，本次不重试", "error");
+      return false;
+    }
+
+    const outcome = await new Promise<"resumed" | "cancelled" | "rejected" | "aborted">((resolve) => {
+      let settled = false;
+      const finish = (value: "resumed" | "cancelled" | "rejected" | "aborted"): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      const onAbort = (): void => finish("aborted");
+      if (signal.aborted) {
+        finish("aborted");
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      wait.then(
+        (reachable) => finish(reachable === true ? "resumed" : "cancelled"),
+        () => finish("rejected")
+      );
+    });
+
+    if (outcome === "resumed") {
+      return true;
+    }
+    if (outcome === "rejected") {
+      targetUi?.notify("PVP: 看门狗探测失败，本次不重试", "error");
+    }
+    return false;
   }
 
   /** Update footer status and persistent widget docked below the editor with native styling and zero indentation. */
@@ -397,6 +538,9 @@ export class PvpController {
     if (ui) {
       this.activeUi = ui;
     }
+    // A new prompt starts a fresh run: an outstanding wake-guard gate from the
+    // previous run must never resume into it.
+    this.abortRetryWaits();
     const hadAttempts = this.attemptCount > 0 || this.lastError !== undefined;
     this.attemptCount = 0;
     this.lastError = undefined;
@@ -537,12 +681,13 @@ export class PvpController {
     return true;
   }
 
-  /** Cancel any pending retry timer and clear the pending retry flag. */
+  /** Cancel any pending retry timer, clear the pending retry flag, and interrupt waits. */
   cancelRetry(): void {
     if (this.retryTimer !== undefined) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
     }
+    this.abortRetryWaits();
     this.pendingRetry = false;
     this.retryInFlight = false;
   }
@@ -591,7 +736,7 @@ let activeHookCleanup: (() => void) | undefined = undefined;
  * 0.87+ requires durable context omission; older hosts keep retry context in memory.
  * Keep the host's prompt/continue loop, without injecting another user message.
  */
-export function installPvpRetryHook(controller: PvpController): () => void {
+export function installPvpRetryHook(controller: PvpController, options?: PvpRetryHookOptions): () => void {
   activeHookCleanup?.();
   const sessionProto = AgentSession.prototype as any;
   const origIsRetryable = sessionProto._isRetryableError;
@@ -620,7 +765,15 @@ export function installPvpRetryHook(controller: PvpController): () => void {
   const lifecycleMethod: "_startRun" | "_runAgentPrompt" = runLifecycleMethod;
   const abort = function (this: any, ...args: any[]) {
     if (installed && controller.enabled) {
-      if (this._isAgentRunActive === true && controller.shouldForceRetryOverAbort(this._lastAssistantMessage)) {
+      // Force-over-abort only covers the existing goal turn_end/agent_end reaction, which
+      // happens before any retry wait exists. An explicit Esc/Ctrl+C while a wake-guard gate
+      // (or the native yield) is parked must really cancel: swallowing it would let the run
+      // resume after the user stopped it.
+      if (
+        !controller.isAwaitingRetryWait &&
+        this._isAgentRunActive === true &&
+        controller.shouldForceRetryOverAbort(this._lastAssistantMessage)
+      ) {
         // A host extension (e.g. goal) aborted the run in reaction to the very provider
         // failure PVP is about to retry. Forwarding that abort would latch the run loop
         // closed before the post-run retry check, so keep the loop alive and let the
@@ -657,22 +810,55 @@ export function installPvpRetryHook(controller: PvpController): () => void {
     const ui = this._extensionUIContext;
     const error = typeof message?.errorMessage === "string" ? message.errorMessage : undefined;
 
-    // Do not fall back to slicing if durable omission fails: that would silently
-    // resurrect a failed reply on the next SessionManager projection refresh.
-    if (typeof this._omitRecoveryAttempt === "function") {
-      this._omitRecoveryAttempt(message);
-    } else {
-      const messages = this.agent?.state?.messages;
-      if (Array.isArray(messages) && messages.at(-1)?.role === "assistant") {
-        this.agent.state.messages = messages.slice(0, -1);
-      }
-    }
-
+    // The wait controller exists before any session mutation so /pvp off, abort, model
+    // change, session switch/shutdown and reload can cancel the wake-guard gate too.
     const abortController = new AbortController();
     this._retryAbortController = abortController;
     waits.add(abortController);
+    const untrackRetryWait = controller.trackRetryWait(abortController);
     const { signal } = abortController;
     try {
+      if (options?.emitRetryGate) {
+        const rawModel: unknown = this.model;
+        const model: PvpRetryGateModel | undefined =
+          rawModel &&
+          typeof rawModel === "object" &&
+          "provider" in rawModel &&
+          typeof rawModel.provider === "string" &&
+          "id" in rawModel &&
+          typeof rawModel.id === "string" &&
+          "api" in rawModel &&
+          typeof rawModel.api === "string" &&
+          "baseUrl" in rawModel &&
+          typeof rawModel.baseUrl === "string"
+            ? { provider: rawModel.provider, id: rawModel.id, api: rawModel.api, baseUrl: rawModel.baseUrl }
+            : undefined;
+        // No session mutation yet: a parked or cancelled gate leaves the failed reply in
+        // context and costs no retry attempt.
+        const approved = await controller.awaitRetryGate(
+          options.emitRetryGate,
+          { errorMessage: error ?? "", model },
+          signal,
+          ui
+        );
+        if (!approved || !installed || !controller.enabled || cancelledRuns.has(this) || this._agentRunAbortRequested) {
+          this._retryAttempt = 0;
+          controller.handleAbort(ui);
+          return false;
+        }
+      }
+
+      // Do not fall back to slicing if durable omission fails: that would silently
+      // resurrect a failed reply on the next SessionManager projection refresh.
+      if (typeof this._omitRecoveryAttempt === "function") {
+        this._omitRecoveryAttempt(message);
+      } else {
+        const messages = this.agent?.state?.messages;
+        if (Array.isArray(messages) && messages.at(-1)?.role === "assistant") {
+          this.agent.state.messages = messages.slice(0, -1);
+        }
+      }
+
       controller.recordRetryAttempt(ui, error);
       // A zero-delay yield lets Escape/Ctrl+C, /pvp off and reload interrupt.
       const elapsed = await new Promise<boolean>((resolve) => {
@@ -691,6 +877,7 @@ export function installPvpRetryHook(controller: PvpController): () => void {
       }
       return true;
     } finally {
+      untrackRetryWait();
       waits.delete(abortController);
       if (this._retryAbortController === abortController) this._retryAbortController = undefined;
     }
